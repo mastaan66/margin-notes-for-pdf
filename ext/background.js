@@ -2,6 +2,9 @@
 // Job: make sure any PDF the user opens in a tab lands in our viewer instead of
 // Chrome's built-in one, unless the user asked to bypass or turned us off.
 
+// Firefox exposes promise-based APIs on `browser`; Chrome on `chrome`. Use one name.
+const chrome = globalThis.browser ?? globalThis.chrome;
+const IS_FIREFOX = typeof navigator !== "undefined" && /firefox/i.test(navigator.userAgent);
 const VIEWER = chrome.runtime.getURL("viewer/viewer.html");
 const RULE_HTTP_PDF = 1;
 const BYPASS_TTL_MS = 30_000;
@@ -38,15 +41,18 @@ async function syncRules() {
           },
           condition: {
             regexFilter: "^https?://[^?#]+\\.pdf([?#].*)?$",
+            isUrlFilterCaseSensitive: false,
             resourceTypes: ["main_frame"],
           },
         },
       ]
     : [];
-  await chrome.declarativeNetRequest.updateDynamicRules({
-    removeRuleIds: [RULE_HTTP_PDF],
-    addRules,
-  });
+  try {
+    await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [RULE_HTTP_PDF], addRules });
+  } catch (e) {
+    // Firefox: DNR redirect rules need host access, which the user may not have granted yet.
+    console.warn("DNR rule update failed", e);
+  }
 }
 
 function viewerUrlFor(url) {
@@ -103,20 +109,22 @@ async function redirectTab(tabId, url) {
 }
 
 // ---------- file:// PDFs (DNR can't touch these) ----------
-chrome.webNavigation.onBeforeNavigate.addListener(
-  (d) => {
-    if (d.frameId !== 0) return;
-    if (PDF_URL_RE.test(d.url)) redirectTab(d.tabId, d.url);
-  },
-  { url: [{ schemes: ["file"] }] }
-);
-
-// Belt and braces: catches file:// URLs typed/dropped when onBeforeNavigate misses.
-chrome.tabs.onUpdated.addListener((tabId, info) => {
-  if (info.url && /^file:/i.test(info.url) && PDF_URL_RE.test(info.url)) {
-    redirectTab(tabId, info.url);
-  }
-});
+// Firefox extensions cannot read file:// at all, so leave those to Firefox's own viewer there.
+if (!IS_FIREFOX) {
+  chrome.webNavigation.onBeforeNavigate.addListener(
+    (d) => {
+      if (d.frameId !== 0) return;
+      if (PDF_URL_RE.test(d.url)) redirectTab(d.tabId, d.url);
+    },
+    { url: [{ schemes: ["file"] }] }
+  );
+  // Belt and braces: catches file:// URLs typed/dropped when onBeforeNavigate misses.
+  chrome.tabs.onUpdated.addListener((tabId, info) => {
+    if (info.url && /^file:/i.test(info.url) && PDF_URL_RE.test(info.url)) {
+      redirectTab(tabId, info.url);
+    }
+  });
+}
 
 // ---------- PDFs served without a .pdf extension (content-type sniff) ----------
 chrome.webRequest.onHeadersReceived.addListener(
@@ -178,6 +186,7 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "sync" && changes.enabled) syncRules();
 });
+chrome.permissions?.onAdded?.addListener(() => syncRules());
 
 // ---------- messages from viewer / popup / options ----------
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -188,10 +197,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return { ok: true };
       }
       case "getFileAccess": {
-        const allowed = await new Promise((r) => chrome.extension.isAllowedFileSchemeAccess(r));
-        return { allowed };
+        if (IS_FIREFOX) return { allowed: false, firefox: true };
+        const allowed = await new Promise((r) => { const p = chrome.extension.isAllowedFileSchemeAccess(r); if (p?.then) p.then(r); });
+        return { allowed, firefox: false };
+      }
+      case "getHostAccess": {
+        try { return { granted: await chrome.permissions.contains({ origins: ["<all_urls>"] }), firefox: IS_FIREFOX }; }
+        catch { return { granted: true, firefox: IS_FIREFOX }; }
       }
       case "openExtensionsPage": {
+        if (IS_FIREFOX) return { ok: false, hint: "about:addons" }; // privileged URL, can't be opened by extensions
         await chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
         return { ok: true };
       }

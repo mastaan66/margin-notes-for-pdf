@@ -1,4 +1,5 @@
 import { db, notesToMarkdown } from "../viewer/db.js";
+const chrome = globalThis.browser ?? globalThis.chrome;
 const DEFAULTS = { enabled: true, side: "left", splitRatio: 0.58, theme: "system", fontSize: 15, fontFamily: "serif", autoQuote: true, defaultZoom: "width", touchDraws: true, paper: "lines" };
 const $ = (id) => document.getElementById(id);
 const status = (m) => { $("status").textContent = m; setTimeout(() => { if ($("status").textContent === m) $("status").textContent = ""; }, 4000); };

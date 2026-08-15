@@ -193,7 +193,9 @@ try {
   const inkPx = await page.$eval('.page[data-page="1"] .inkLayer', (c) => { const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++; return n; });
   check(inkPx > 500, `page ink re-rendered after zoom (${inkPx} px)`);
   await page.select("#zoomSelect", "width");
-  await page.mouse.move(lb.x + 150, lb.y + 150);
+  await page.waitForSelector('.page[data-page="1"] .inkLayer', { timeout: 20000 });
+  await new Promise((r) => setTimeout(r, 800)); // page re-render after zoom change remounts the ink layer
+  await page.mouse.move(lb.x + 140, lb.y + 140); await page.mouse.move(lb.x + 150, lb.y + 150);
   await new Promise((r) => setTimeout(r, 100));
   const cur2 = await page.$eval(".ink-cursor", (c) => ({ hidden: c.hidden, tool: c.dataset.tool }));
   check(!cur2.hidden && cur2.tool === "hl", `software cursor over page in annotate mode (${JSON.stringify(cur2)})`);

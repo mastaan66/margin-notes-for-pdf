@@ -2,12 +2,21 @@
 
 Opens every PDF you land on **docked to the left or right** of the tab, and turns the free space into a **notebook with one note per page**. Notes follow the page you're reading, autosave as you type, and are keyed to the PDF's fingerprint so they survive renames, moves and re-downloads.
 
-## Install (unpacked)
+## Install
 
+### Chrome / Edge / Brave (unpacked)
 1. Open `chrome://extensions` → turn on **Developer mode** (top right).
-2. Click **Load unpacked** → choose the `ext/` folder of this repo.
+2. Click **Load unpacked** → choose the `ext/` folder of this repo (or unzip `dist/margin-notes-chrome-<v>.zip`).
 3. On the extension's card click **Details** → enable **Allow access to file URLs** (needed for `file://` PDFs — downloads, local files).
 4. Open any PDF (link, address bar, local file). It opens in Margin Notes.
+
+### Firefox (temporary add-on)
+1. `npm run build` → produces `build/firefox/` and `dist/margin-notes-firefox-<v>.zip`.
+2. Open `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → pick `build/firefox/manifest.json`.
+3. If a banner asks, click **Allow access to websites** on the landing page (Firefox MV3 host permissions are opt-in). Firefox 140+ usually grants them at install.
+4. Temporary add-ons are removed on restart. For a permanent install, sign it: `npx web-ext sign --source-dir build/firefox --channel unlisted --api-key … --api-secret …` (free AMO account) and install the resulting `.xpi`.
+
+Firefox differences: extensions can't read `file://`, so local PDFs open in Firefox's own viewer — drop them onto the Margin Notes landing page instead. Everything else (interception, notes, ink) is identical.
 
 Pin the toolbar icon if you want the quick toggle / side switch popup (`Alt+Shift+M`).
 
@@ -43,17 +52,23 @@ ext/
 test/
   e2e.mjs               headless Chrome smoke test (puppeteer-core, uses installExtension)
   e2e-intercept.mjs     content-type sniff / attachment / file:// paths
+  e2e-firefox.mjs       Firefox smoke test (temporary install via BiDi)
+scripts/build.mjs       browser-specific bundles
 ```
 
 ## Develop / test
 
 ```bash
 npm install
-# serve a PDF locally for the http test (any static server), then:
-PDF_URL=http://127.0.0.1:8765/some.pdf npm test
-npm run test:intercept
-npm run pack        # → dist/margin-notes-<version>.zip
+npm run build             # build/chrome + build/firefox, zips in dist/
+npm run lint:firefox      # web-ext lint (AMO validator)
+# serve a PDF locally for the http tests (any static server), then:
+PDF_URL=http://127.0.0.1:8765/some.pdf npm test          # Chrome e2e (36 checks)
+npm run test:intercept                                     # Chrome: sniff / attachment / file://
+npm run test:firefox                                       # Firefox e2e via WebDriver BiDi
 ```
+
+`ext/` is Chrome-shaped and the source of truth; `scripts/build.mjs` derives the Firefox manifest (event-page background, gecko id, data-collection declaration). Runtime differences are feature-detected (`globalThis.browser ?? chrome`, `IS_FIREFOX`).
 
 Tests use `puppeteer-core` with the system Chrome (`CHROME=/path/to/chrome` to override). Branded Chrome ≥137 ignores `--load-extension`, so tests use `--enable-unsafe-extension-debugging` + `installExtension()`.
 

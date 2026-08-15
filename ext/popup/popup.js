@@ -1,3 +1,4 @@
+const chrome = globalThis.browser ?? globalThis.chrome;
 const $ = (id) => document.getElementById(id);
 async function init() {
   const s = await chrome.storage.sync.get({ enabled: true, side: "left" });

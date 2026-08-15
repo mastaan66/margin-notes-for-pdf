@@ -6,7 +6,11 @@
   "scripts": {
     "test": "node test/e2e.mjs",
     "test:intercept": "node test/e2e-intercept.mjs",
-    "pack": "mkdir -p dist && cd ext && zip -qr ../dist/margin-notes-$(node -p \"require('./manifest.json').version\").zip . -x \"*.map\" && ls -la ../dist"
+    "pack": "node scripts/build.mjs",
+    "build": "node scripts/build.mjs",
+    "lint:firefox": "npx web-ext lint --source-dir build/firefox",
+    "run:firefox": "npx web-ext run --source-dir build/firefox",
+    "test:firefox": "node test/e2e-firefox.mjs"
   },
   "keywords": [],
   "author": "",

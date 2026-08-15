@@ -190,6 +190,13 @@
       <p class="muted">Any PDF you open in a tab will now open here automatically.</p>
     </div>
 
+    <div id="hostPermWarn" class="warn" hidden>
+      <strong>One more step:</strong> this browser hasn't allowed the extension to read PDFs from websites yet.
+      <button id="btnGrantHost" class="btn-inline">Allow access to websites</button>
+    </div>
+    <div id="firefoxFileNote" class="warn" hidden>
+      <strong>Firefox note:</strong> extensions can't read local <code>file://</code> PDFs, so those open in Firefox's own viewer. Drop a local PDF here (or use <em>choose a file</em>) to take notes on it.
+    </div>
     <div id="fileAccessWarn" class="warn" hidden>
       <strong>Local files:</strong> to open <code>file://</code> PDFs directly, enable
       <em>“Allow access to file URLs”</em> for this extension.

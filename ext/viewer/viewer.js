@@ -2,8 +2,10 @@
 import * as pdfjsLib from "../lib/pdf.mjs";
 import { db, notesToMarkdown } from "./db.js";
 import { renderMarkdown } from "./markdown.js";
-import { InkSurface, buildInkToolbar, inkState, setInkState, onInkStateChange, drawStrokes, strokesToPng, hideInkCursor } from "./ink.js";
+import { InkSurface, buildInkToolbar, inkState, setInkState, onInkStateChange, drawStrokes, strokesToPng, hideInkCursor, icon } from "./ink.js";
 
+const chrome = globalThis.browser ?? globalThis.chrome;
+const IS_FIREFOX = /firefox/i.test(navigator.userAgent);
 const LIB = chrome.runtime.getURL("lib/");
 pdfjsLib.GlobalWorkerOptions.workerSrc = LIB + "pdf.worker.mjs";
 
@@ -18,7 +20,7 @@ const el = {
   npDocBtn: $("npDocBtn"), noteStrip: $("noteStrip"), saveStatus: $("saveStatus"), wordCount: $("wordCount"),
   allList: $("allList"), allFilter: $("allFilter"), allCount: $("allCount"), outline: $("outline"),
   recentList: $("recentList"), fileInput: $("fileInput"), dropZone: $("dropZone"), fileAccessWarn: $("fileAccessWarn"),
-  loadError: $("loadError"), menu: $("menu"), toast: $("toast"), shortcuts: $("shortcuts"),
+  loadError: $("loadError"), menu: $("menu"), toast: $("toast"), shortcuts: $("shortcuts"), hostPermWarn: $("hostPermWarn"),
   noteEditor: $("noteEditor"), sketch: $("sketch"), sketchWrap: $("sketchWrap"), sketchCanvas: $("sketchCanvas"),
   noteInkBar: $("noteInkBar"), pageInkBar: $("pageInkBar"), btnModeText: $("btnModeText"), btnModeInk: $("btnModeInk"),
 };
@@ -154,11 +156,15 @@ async function showLoadError(e, url) {
   showLanding();
   let msg = `Couldn't open the PDF.\n${e?.message || e}`;
   if (url && /^file:/i.test(url)) {
-    const { allowed } = await chrome.runtime.sendMessage({ type: "getFileAccess" }).catch(() => ({ allowed: true }));
-    if (!allowed) {
+    const { allowed, firefox } = await chrome.runtime.sendMessage({ type: "getFileAccess" }).catch(() => ({ allowed: true }));
+    if (firefox) msg = `Firefox doesn't let extensions read local files (${url}).\n\nDrop the PDF onto this page or use "choose a file" — notes still work.`;
+    else if (!allowed) {
       el.fileAccessWarn.hidden = false;
       msg = `Couldn't read ${url}\n\nChrome blocks extensions from reading local files until you enable "Allow access to file URLs" (button above). Alternatively, drop the file onto this page.`;
     }
+  } else if (url && /^https?:/i.test(url)) {
+    const { granted } = await chrome.runtime.sendMessage({ type: "getHostAccess" }).catch(() => ({ granted: true }));
+    if (!granted) { el.hostPermWarn.hidden = false; msg = `Couldn't fetch ${url}\n\nThe extension hasn't been allowed to access websites yet — click "Allow access to websites" above, then reload.`; }
   }
   el.loadError.textContent = msg;
   el.loadError.hidden = false;
@@ -173,11 +179,19 @@ function showLanding() {
   document.title = "Margin Notes";
   refreshRecents();
   checkFileAccess();
+  checkHostAccess();
 }
 async function checkFileAccess() {
   try {
-    const { allowed } = await chrome.runtime.sendMessage({ type: "getFileAccess" });
-    el.fileAccessWarn.hidden = !!allowed;
+    const { allowed, firefox } = await chrome.runtime.sendMessage({ type: "getFileAccess" });
+    el.fileAccessWarn.hidden = !!allowed || !!firefox;
+    $("firefoxFileNote").hidden = !firefox;
+  } catch { /* ignore */ }
+}
+async function checkHostAccess() {
+  try {
+    const { granted } = await chrome.runtime.sendMessage({ type: "getHostAccess" });
+    el.hostPermWarn.hidden = !!granted;
   } catch { /* ignore */ }
 }
 
@@ -589,8 +603,11 @@ function updateWordCount() {
   const words = t ? t.split(/\s+/).length : 0;
   el.wordCount.textContent = words ? `${words} word${words === 1 ? "" : "s"}` : "";
 }
+function emptyEl(text) { const d = document.createElement("div"); d.className = "empty"; d.textContent = text; return d; }
 function renderPreview() {
-  el.notePreview.innerHTML = renderMarkdown(el.noteText.value);
+  // renderMarkdown escapes all input before adding its own tags; parse via DOMParser and adopt the nodes.
+  const doc = new DOMParser().parseFromString(renderMarkdown(el.noteText.value), "text/html");
+  el.notePreview.replaceChildren(...doc.body.childNodes);
 }
 function togglePreview(force) {
   const show = force != null ? force : el.notePreview.hidden;
@@ -667,7 +684,7 @@ function quoteSelectionIntoNotes() {
 function renderAllList() {
   const q = el.allFilter.value.trim().toLowerCase();
   const entries = [...contentPages()].sort((a, b) => a - b).map((pg) => [pg, S.noteCache.get(pg) || ""]).filter(([, t]) => !q || t.toLowerCase().includes(q));
-  if (!entries.length) { el.allList.innerHTML = `<div class="empty">${q ? "No notes match." : "No notes yet. Start typing on the Page notes tab."}</div>`; return; }
+  if (!entries.length) { el.allList.replaceChildren(emptyEl(q ? "No notes match." : "No notes yet. Start typing on the Page notes tab.")); return; }
   const frag = document.createDocumentFragment();
   for (const [page, text] of entries) {
     const card = document.createElement("div");
@@ -757,7 +774,7 @@ function setupSketch() {
     clear: () => { if (confirm("Clear this page's sketch?")) S.sketchSurface.clear(); },
     extra: [{
       title: "Paper: lines / grid / dots / blank",
-      svg: '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M4 14h16"/></svg>',
+      paths: ["M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z", "M4 10h16M4 14h16"],
       onClick: () => { const order = ["lines", "grid", "dots", "blank"]; saveSetting({ paper: order[(order.indexOf(settings.paper) + 1) % order.length] }); },
     }],
   }));
@@ -826,7 +843,7 @@ function setupPageInkBar() {
     clear: () => { if (confirm(`Clear handwriting on page ${S.currentPage}?`)) S.pages[S.currentPage - 1]?.inkSurface?.clear(); },
     extra: [{
       title: "Done annotating (A / Esc)",
-      svg: '<svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>',
+      paths: ["M5 12l5 5L20 7"],
       onClick: () => setAnnotating(false),
     }],
   }, { onPaper: true }));
@@ -868,7 +885,7 @@ async function exportInk(pages) {
 
 // ---------- outline ----------
 async function loadOutline() {
-  el.outline.innerHTML = '<div class="empty">No outline in this document.</div>';
+  el.outline.replaceChildren(emptyEl("No outline in this document."));
   S.outlineItems = []; S.outlinePages = [];
   let outline = null;
   try { outline = await S.pdf.getOutline(); } catch { /* ignore */ }
@@ -879,7 +896,7 @@ async function loadOutline() {
       const li = document.createElement("li");
       const row = document.createElement("div"); row.className = "ol-row";
       const tog = document.createElement("button"); tog.className = "ol-toggle" + (it.items?.length ? "" : " leaf");
-      tog.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>';
+      tog.appendChild(icon(["M6 9l6 6 6-6"]));
       tog.addEventListener("click", () => li.classList.toggle("collapsed"));
       const btn = document.createElement("button"); btn.className = "ol-link"; btn.textContent = it.title || "(untitled)";
       const idx = S.outlineItems.length;
@@ -1017,7 +1034,7 @@ function positionBubble() {
 // ---------- recents (landing) ----------
 async function refreshRecents() {
   const docs = await db.listDocs();
-  if (!docs.length) { el.recentList.innerHTML = '<div class="empty">Nothing yet.</div>'; return; }
+  if (!docs.length) { el.recentList.replaceChildren(emptyEl("Nothing yet.")); return; }
   const frag = document.createDocumentFragment();
   for (const d of docs.slice(0, 40)) {
     const row = document.createElement("div"); row.className = "recent";
@@ -1185,6 +1202,13 @@ function wireEvents() {
   // landing
   el.fileInput.addEventListener("change", () => { const f = el.fileInput.files?.[0]; if (f) openFile(f); el.fileInput.value = ""; });
   $("btnOpenExtPage").addEventListener("click", () => chrome.runtime.sendMessage({ type: "openExtensionsPage" }));
+  $("btnGrantHost").addEventListener("click", async () => {
+    // must run inside the click handler (user gesture)
+    let ok = false;
+    try { ok = await chrome.permissions.request({ origins: ["<all_urls>"] }); } catch (e) { console.warn(e); }
+    if (ok) { el.hostPermWarn.hidden = true; chrome.runtime.sendMessage({ type: "syncRules" }); toast("Access granted — PDFs will now open here"); const u = parseFileParam(); if (u) location.reload(); }
+    else toast("Permission not granted");
+  });
   $("btnLibraryExport").addEventListener("click", async () => { const all = await db.exportAll(); downloadText(`margin-notes-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(all, null, 2), "application/json"); });
   for (const evt of ["dragenter", "dragover"]) document.addEventListener(evt, (e) => { if ([...(e.dataTransfer?.types || [])].includes("Files")) { e.preventDefault(); el.dropZone.classList.add("over"); } });
   for (const evt of ["dragleave", "drop"]) document.addEventListener(evt, () => el.dropZone.classList.remove("over"));

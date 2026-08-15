@@ -28,44 +28,54 @@ export function resolveColor(c, onPaper) {
 }
 
 // ---------- toolbar ----------
-const svg = {
-  pen: '<svg viewBox="0 0 24 24"><path d="M4 20l4-1 10-10-3-3L5 16z"/><path d="M13 7l3 3"/></svg>',
-  hl: '<svg viewBox="0 0 24 24"><path d="M9 15l-4 4H3v-2l4-4"/><path d="M9 15l8-8 3 3-8 8"/><path d="M14 4l6 6"/></svg>',
-  eraser: '<svg viewBox="0 0 24 24"><path d="M4 16l8-8 6 6-4 4H8z"/><path d="M6 20h14"/></svg>',
-  undo: '<svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h9a6 6 0 0 1 0 12h-2"/></svg>',
-  redo: '<svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9h-9a6 6 0 0 0 0 12h2"/></svg>',
-  clear: '<svg viewBox="0 0 24 24"><path d="M5 7h14M9 7V4h6v3M8 7l1 13h6l1-13"/></svg>',
+const SVG_NS = "http://www.w3.org/2000/svg";
+/** Build a 24x24 stroke icon from path `d` strings (no innerHTML). */
+export function icon(paths) {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  for (const d of paths) { const p = document.createElementNS(SVG_NS, "path"); p.setAttribute("d", d); svg.appendChild(p); }
+  return svg;
+}
+const ICONS = {
+  pen: ["M4 20l4-1 10-10-3-3L5 16z", "M13 7l3 3"],
+  hl: ["M9 15l-4 4H3v-2l4-4", "M9 15l8-8 3 3-8 8", "M14 4l6 6"],
+  eraser: ["M4 16l8-8 6 6-4 4H8z", "M6 20h14"],
+  undo: ["M9 14L4 9l5-5", "M4 9h9a6 6 0 0 1 0 12h-2"],
+  redo: ["M15 14l5-5-5-5", "M20 9h-9a6 6 0 0 0 0 12h2"],
+  clear: ["M5 7h14M9 7V4h6v3M8 7l1 13h6l1-13"],
 };
 
-/** Builds a toolbar into `root`. `actions` = { undo, redo, clear, extra?: [{title, svg, onClick, isActive?}] } */
+/** Builds a toolbar into `root`. `actions` = { undo, redo, clear, extra?: [{title, paths, onClick, isActive?}] } */
 export function buildInkToolbar(root, actions, { onPaper = false } = {}) {
   root.classList.add("ink-toolbar");
-  root.innerHTML = "";
-  const mk = (cls, title, html, onClick) => {
-    const b = document.createElement("button"); b.className = "ink-btn " + cls; b.title = title; b.innerHTML = html;
+  root.replaceChildren();
+  const mk = (cls, title, content, onClick) => {
+    const b = document.createElement("button"); b.className = "ink-btn " + cls; b.title = title;
+    if (content instanceof Node) b.appendChild(content);
     b.addEventListener("pointerdown", (e) => e.preventDefault()); // keep focus/selection
     b.addEventListener("click", onClick); root.appendChild(b); return b;
   };
   const tools = {
-    pen: mk("tool", "Pen (P)", svg.pen, () => setInkState({ tool: "pen" })),
-    hl: mk("tool", "Highlighter (H)", svg.hl, () => setInkState({ tool: "hl" })),
-    eraser: mk("tool", "Eraser (E) — strokes it touches", svg.eraser, () => setInkState({ tool: "eraser" })),
+    pen: mk("tool", "Pen (P)", icon(ICONS.pen), () => setInkState({ tool: "pen" })),
+    hl: mk("tool", "Highlighter (H)", icon(ICONS.hl), () => setInkState({ tool: "hl" })),
+    eraser: mk("tool", "Eraser (E) — strokes it touches", icon(ICONS.eraser), () => setInkState({ tool: "eraser" })),
   };
   root.appendChild(sep());
   const colorBtns = COLORS.map(([c, name]) => {
-    const b = mk("color", name, "", () => setInkState({ color: c, tool: inkState.tool === "eraser" ? "pen" : inkState.tool }));
+    const b = mk("color", name, null, () => setInkState({ color: c, tool: inkState.tool === "eraser" ? "pen" : inkState.tool }));
     b.dataset.color = c; return b;
   });
   root.appendChild(sep());
   const sizeBtns = SIZES.map(([s, name]) => {
-    const b = mk("size", name, `<i style="width:${4 + s * 2}px;height:${4 + s * 2}px"></i>`, () => setInkState({ size: s }));
+    const dot = document.createElement("i"); dot.style.width = dot.style.height = `${4 + s * 2}px`;
+    const b = mk("size", name, dot, () => setInkState({ size: s }));
     b.dataset.size = String(s); return b;
   });
   root.appendChild(sep());
-  mk("", "Undo (Ctrl+Z)", svg.undo, actions.undo);
-  mk("", "Redo (Ctrl+Shift+Z)", svg.redo, actions.redo);
-  mk("", "Clear this sheet", svg.clear, actions.clear);
-  for (const x of actions.extra || []) { const b = mk("extra", x.title, x.svg, x.onClick); x.btn = b; }
+  mk("", "Undo (Ctrl+Z)", icon(ICONS.undo), actions.undo);
+  mk("", "Redo (Ctrl+Shift+Z)", icon(ICONS.redo), actions.redo);
+  mk("", "Clear this sheet", icon(ICONS.clear), actions.clear);
+  for (const x of actions.extra || []) { const b = mk("extra", x.title, icon(x.paths), x.onClick); x.btn = b; }
   const refresh = () => {
     for (const [k, b] of Object.entries(tools)) b.classList.toggle("active", inkState.tool === k);
     for (const b of colorBtns) {
