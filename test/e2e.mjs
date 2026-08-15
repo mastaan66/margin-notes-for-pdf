@@ -144,6 +144,62 @@ try {
   await new Promise((r) => setTimeout(r, 300));
   check((await page.$eval("#noteText", (e) => e.value)).includes("> "), "Ctrl+Q quoted selection into note");
 
+  // ---- ink: sketch pad in notes pane ----
+  await page.click("#btnModeInk");
+  await new Promise((r) => setTimeout(r, 400));
+  check(await page.$eval("#sketch", (e) => !e.hidden), "Draw mode shows sketch pad");
+  const sc = await page.$("#sketchCanvas");
+  const sb = await sc.boundingBox();
+  await page.mouse.move(sb.x + 40, sb.y + 40); await page.mouse.down();
+  for (let i = 1; i <= 20; i++) await page.mouse.move(sb.x + 40 + i * 8, sb.y + 40 + Math.sin(i / 3) * 20, { steps: 2 });
+  await page.mouse.up();
+  await new Promise((r) => setTimeout(r, 700));
+  const inkCount = await page.evaluate(async () => { const { db } = await import("./db.js"); const all = await db.exportAll(); return all.ink.length; });
+  check(inkCount === 1, `sketch stroke persisted to IndexedDB (${inkCount} ink records)`);
+  check(await page.$eval("#btnModeInk", (e) => e.classList.contains("has")), "Draw button shows content dot");
+  const drawn = await page.$eval("#sketchCanvas", (c) => { const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++; return n; });
+  check(drawn > 200, `sketch canvas has ink pixels (${drawn})`);
+  // undo removes it
+  await page.keyboard.down("Control"); await page.keyboard.press("z"); await page.keyboard.up("Control");
+  await new Promise((r) => setTimeout(r, 700));
+  const afterUndo = await page.evaluate(async () => { const { db } = await import("./db.js"); return (await db.exportAll()).ink.length; });
+  check(afterUndo === 0, "Ctrl+Z undo removed the stroke");
+  await page.keyboard.down("Control"); await page.keyboard.down("Shift"); await page.keyboard.press("z"); await page.keyboard.up("Shift"); await page.keyboard.up("Control");
+  await new Promise((r) => setTimeout(r, 700));
+  await page.screenshot({ path: path.join(OUT, "08-sketch.png") });
+  await page.click("#btnModeText");
+
+  // ---- ink: annotate directly on the PDF page ----
+  await page.focus("#viewerScroll");
+  await page.keyboard.press("a");
+  check(await page.$eval("body", (b) => b.classList.contains("annotating")), "annotate mode on");
+  const layer = await page.$('.page[data-page="1"] .inkLayer');
+  const lb = await layer.boundingBox();
+  await page.mouse.move(lb.x + 100, lb.y + 200); await page.mouse.down();
+  for (let i = 1; i <= 25; i++) await page.mouse.move(lb.x + 100 + i * 10, lb.y + 200 + (i % 2) * 6, { steps: 2 });
+  await page.mouse.up();
+  await new Promise((r) => setTimeout(r, 700));
+  check(await page.$eval('.page[data-page="1"]', (e) => e.classList.contains("has-ink")), "page 1 marked has-ink");
+  // highlighter + zoom → strokes re-rendered at new scale
+  await page.keyboard.press("h");
+  await page.mouse.move(lb.x + 100, lb.y + 300); await page.mouse.down(); await page.mouse.move(lb.x + 400, lb.y + 300, { steps: 10 }); await page.mouse.up();
+  await new Promise((r) => setTimeout(r, 500));
+  await page.screenshot({ path: path.join(OUT, "09-annotate.png") });
+  await page.click("#btnZoomIn"); await new Promise((r) => setTimeout(r, 900));
+  const inkPx = await page.$eval('.page[data-page="1"] .inkLayer', (c) => { const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++; return n; });
+  check(inkPx > 500, `page ink re-rendered after zoom (${inkPx} px)`);
+  await page.select("#zoomSelect", "width");
+  await page.keyboard.press("Escape");
+  check(!(await page.$eval("body", (b) => b.classList.contains("annotating"))), "Esc leaves annotate mode");
+  // reload → page ink persists
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => document.getElementById("pageCount").textContent !== "–", { timeout: 60000 });
+  await page.waitForSelector('.page[data-page="1"] .inkLayer', { timeout: 20000 });
+  await new Promise((r) => setTimeout(r, 600));
+  check(await page.$eval('.page[data-page="1"]', (e) => e.classList.contains("has-ink")), "page ink persisted across reload");
+  const inkPx2 = await page.$eval('.page[data-page="1"] .inkLayer', (c) => { const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++; return n; });
+  check(inkPx2 > 500, `page ink drawn after reload (${inkPx2} px)`);
+
   // export markdown via menu (check that download click doesn't throw)
   await page.click("#btnMenu");
   check(await page.$eval("#menu", (e) => !e.hidden), "menu opens");

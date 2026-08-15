@@ -19,6 +19,7 @@ Pin the toolbar icon if you want the quick toggle / side switch popup (`Alt+Shif
 | Layout | PDF left or right (`Alt+S`), draggable splitter (double-click resets), notes pane hideable (`Alt+N`), light/dark/system theme, "dim pages" night mode. |
 | Viewer | Continuous scroll, fit width/page, zoom (`Ctrl`+wheel, `+`/`-`), rotate, find (`Ctrl+F`, highlights in text layer), text selection, clickable internal/external links, outline (bookmarks) tab, `#page=N` deep links, resumes on last page, password PDFs. Rendering is virtualised (~1 screen ahead/behind), tested on a 1971-page PDF. |
 | Notes | One note per page + a document-level note. Follows scroll; **pin** to hold a page. Markdown subset with live preview (`Ctrl+E`): headings, lists, tasks, quotes, code, links, `p.12` auto-links to page 12. List continuation, `Tab` indent, `Ctrl+B/I`. Word count, saved indicator, "pages with notes" strip, prev/next noted page. |
+| Handwriting | **Draw mode** in the notes pane: a per-page sketch pad (pen / highlighter / stroke-eraser, 6 colours, 3 widths, pressure-sensitive, ruled/grid/dot/blank paper, grows as you write, undo/redo). **Annotate mode** (`A`): write directly on the PDF pages — strokes are stored in PDF coordinates so they stay put across zoom/rotate and are re-rendered on every page render. Pointer Events: pen, mouse and (optionally) touch; palm rejection while a pen is active; pen barrel/eraser button erases. Export any page's handwriting as PNG (page + ink composited). |
 | Quote | Select text in the PDF → *Add to notes* bubble (or `Ctrl+Q`) drops it into that page's note as a `>` quote. |
 | All notes | Filterable list of every note in the document; click to jump. |
 | Storage | IndexedDB, keyed by PDF fingerprint (`docs` + `notes` stores). Export a document's notes as Markdown/JSON, copy all, back up / restore everything from Settings. |
@@ -35,6 +36,7 @@ ext/
     viewer.html/css/js  split-view viewer + notes UI
     db.js               IndexedDB layer + Markdown export
     markdown.js         small safe Markdown renderer
+    ink.js              ink engine: pointer-event capture, vector strokes, toolbar, PNG raster
   options/              settings page (sync storage) + backup/import
   popup/                toggle, side switch, open library
   lib/                  pdf.js 6.x (pdf.mjs, worker, cmaps, standard fonts, wasm, iccs)
@@ -59,4 +61,4 @@ Tests use `puppeteer-core` with the system Chrome (`CHROME=/path/to/chrome` to o
 
 - Notes are stored locally in the browser profile (IndexedDB), not synced. Use *Backup all notes* in Settings.
 - Print/“Open in Chrome's viewer” bypasses to Chrome's built-in viewer for that one URL.
-- PDF forms and annotation editing are not supported (read + notes only).
+- PDF forms and PDF-embedded annotation editing are not supported; handwriting is stored alongside your notes (not written into the PDF file). Use *Export handwriting (PNG)* for a flattened image.

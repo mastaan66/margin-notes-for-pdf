@@ -2,7 +2,7 @@
 // document even if it is moved, renamed, or opened from a different URL.
 
 const DB_NAME = "margin-notes";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 let dbPromise = null;
 
 function open() {
@@ -19,6 +19,11 @@ function open() {
         const notes = db.createObjectStore("notes", { keyPath: "key" }); // key = `${fp}:${page}`
         notes.createIndex("fp", "fp");
         notes.createIndex("updated", "updated");
+      }
+      if (!db.objectStoreNames.contains("ink")) {
+        // key = `${fp}:${target}:${page}`; target = 'note' (sketch pad) | 'page' (drawn on the PDF page)
+        const ink = db.createObjectStore("ink", { keyPath: "key" });
+        ink.createIndex("fp", "fp");
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -73,6 +78,10 @@ export const db = {
     await tx("notes", "readwrite", (s) => {
       for (const n of notes) s.delete(n.key);
     });
+    const ink = await this.getInkForDoc(fp);
+    await tx("ink", "readwrite", (s) => {
+      for (const i of ink) s.delete(i.key);
+    });
     await tx("docs", "readwrite", (s) => s.delete(fp));
   },
   async listDocs() {
@@ -100,11 +109,26 @@ export const db = {
     const d = await open();
     return reqToPromise(d.transaction("notes").objectStore("notes").index("fp").count(fp));
   },
+  // ---- ink ----
+  async getInkForDoc(fp) {
+    const d = await open();
+    return reqToPromise(d.transaction("ink").objectStore("ink").index("fp").getAll(fp));
+  },
+  async putInk(fp, target, page, strokes) {
+    const key = `${fp}:${target}:${page}`;
+    if (!strokes || !strokes.length) return tx("ink", "readwrite", (s) => s.delete(key));
+    return tx("ink", "readwrite", (s) => s.put({ key, fp, target, page, strokes, updated: Date.now() }));
+  },
+  async countInkForDoc(fp) {
+    const d = await open();
+    return reqToPromise(d.transaction("ink").objectStore("ink").index("fp").count(fp));
+  },
   async exportAll() {
     const docs = await this.listDocs();
     const d = await open();
     const notes = await reqToPromise(d.transaction("notes").objectStore("notes").getAll());
-    return { version: 1, exportedAt: new Date().toISOString(), docs, notes };
+    const ink = await reqToPromise(d.transaction("ink").objectStore("ink").getAll());
+    return { version: 2, exportedAt: new Date().toISOString(), docs, notes, ink };
   },
   async importAll(payload) {
     if (!payload || !Array.isArray(payload.notes)) throw new Error("Invalid backup file");
@@ -120,18 +144,34 @@ export const db = {
         n++;
       }
     });
+    if (Array.isArray(payload.ink)) {
+      await tx("ink", "readwrite", (s) => {
+        for (const rec of payload.ink) {
+          if (!rec.fp || rec.page == null || !rec.target || !Array.isArray(rec.strokes)) continue;
+          s.put({ ...rec, key: `${rec.fp}:${rec.target}:${rec.page}` });
+          n++;
+        }
+      });
+    }
     return n;
   },
 };
 
 // Notes as Markdown for one document.
-export function notesToMarkdown(doc, notes) {
+export function notesToMarkdown(doc, notes, ink = []) {
   const title = doc?.title || doc?.filename || "Untitled PDF";
   const lines = [`# Notes — ${title}`, ""];
   if (doc?.url) lines.push(`Source: ${doc.url}`, "");
-  lines.push(`_${notes.length} page note${notes.length === 1 ? "" : "s"}, exported ${new Date().toLocaleString()}_`, "");
-  for (const n of notes) {
-    lines.push(n.page === 0 ? "## Document notes" : `## Page ${n.page}`, "", n.text.trim(), "");
+  const inkPages = new Set(ink.map((i) => i.page));
+  lines.push(`_${notes.length} page note${notes.length === 1 ? "" : "s"}${inkPages.size ? `, handwriting on ${inkPages.size} page${inkPages.size === 1 ? "" : "s"}` : ""}, exported ${new Date().toLocaleString()}_`, "");
+  const pages = [...new Set([...notes.map((n) => n.page), ...inkPages])].sort((a, b) => a - b);
+  const byPage = new Map(notes.map((n) => [n.page, n]));
+  for (const pg of pages) {
+    lines.push(pg === 0 ? "## Document notes" : `## Page ${pg}`, "");
+    const n = byPage.get(pg);
+    if (n) lines.push(n.text.trim(), "");
+    const kinds = ink.filter((i) => i.page === pg).map((i) => (i.target === "page" ? "annotations on the page" : "sketch")).join(" + ");
+    if (kinds) lines.push(`_(handwritten ${kinds} — see PNG export)_`, "");
   }
   return lines.join("\n");
 }

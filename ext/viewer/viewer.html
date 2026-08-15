@@ -55,6 +55,9 @@
   </div>
 
   <div class="tb-group tb-right">
+    <button class="tb-btn" id="btnAnnotate" title="Draw on the PDF pages with pen / stylus (A)">
+      <svg viewBox="0 0 24 24"><path d="M4 20l4-1 10-10-3-3L5 16z"/><path d="M13 7l3 3"/></svg>
+    </button>
     <button class="tb-btn" id="btnFind" title="Find in document (Ctrl+F)">
       <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg>
     </button>
@@ -78,6 +81,8 @@
         <button data-act="exportMd">Export notes as Markdown</button>
         <button data-act="exportJson">Export notes as JSON</button>
         <button data-act="copyAll">Copy all notes</button>
+        <button data-act="exportInkPage">Export this page's handwriting (PNG)</button>
+        <button data-act="exportInkAll">Export all handwriting (PNGs)</button>
         <hr>
         <button data-act="download">Download PDF</button>
         <button data-act="chromeViewer">Open in Chrome's viewer</button>
@@ -92,6 +97,7 @@
 
 <main id="split" class="split" hidden>
   <section id="pdfPane" class="pane pdf-pane">
+    <div id="pageInkBar" class="page-ink-bar" hidden></div>
     <div id="findbar" class="findbar" hidden>
       <input id="findInput" type="search" placeholder="Find in document…" autocomplete="off" spellcheck="false">
       <span id="findCount" class="find-count"></span>
@@ -131,14 +137,24 @@
           <div class="np-actions">
             <button class="np-mini" id="btnPrevNoted" title="Previous page with notes">◀</button>
             <button class="np-mini" id="btnNextNoted" title="Next page with notes">▶</button>
+            <span class="np-seg">
+              <button class="np-mini seg" id="btnModeText" title="Typed notes (Alt+T)">Text<i class="dot"></i></button>
+              <button class="np-mini seg" id="btnModeInk" title="Handwriting / sketch with pen, stylus or mouse (Alt+D)">Draw<i class="dot"></i></button>
+            </span>
             <button class="np-mini" id="btnPreview" title="Toggle preview (Ctrl+E)">Preview</button>
           </div>
         </div>
         <div class="note-strip" id="noteStrip" title="Pages with notes"></div>
       </div>
-      <div class="note-editor">
+      <div class="note-editor" id="noteEditor">
         <textarea id="noteText" placeholder="Notes for this page… (Markdown ok: **bold**, - lists, > quotes, - [ ] tasks, p.12 links to page 12)" spellcheck="true"></textarea>
         <div id="notePreview" class="note-preview md" hidden></div>
+      </div>
+      <div class="sketch" id="sketch" hidden>
+        <div id="noteInkBar"></div>
+        <div class="sketch-wrap" id="sketchWrap">
+          <canvas id="sketchCanvas" class="paper-lines"></canvas>
+        </div>
       </div>
       <footer class="notes-foot">
         <span id="saveStatus">—</span>
@@ -197,6 +213,7 @@
         <li>The PDF docks to the left or right (swap with <kbd>Alt</kbd>+<kbd>S</kbd>); the free space is your notebook.</li>
         <li>Notes are tied to the page you're reading and switch as you scroll. Pin to hold a page.</li>
         <li>Select text in the PDF → <em>Add to notes</em> quotes it into that page's note.</li>
+        <li>Got a pen tablet or stylus? Switch the notes pane to <em>Draw</em> for a per-page sketch pad, or press <kbd>A</kbd> to write directly on the PDF pages. Pressure, palm rejection, undo, eraser.</li>
         <li>Notes are keyed to the document's fingerprint, so they survive renames and moves. Export as Markdown any time.</li>
       </ul>
     </details>
@@ -221,6 +238,10 @@
       <kbd>Ctrl+E</kbd><span>Toggle Markdown preview</span>
       <kbd>Ctrl+B / I</kbd><span>Bold / italic in notes</span>
       <kbd>Ctrl+Q</kbd><span>Quote selected PDF text into notes</span>
+      <kbd>A</kbd><span>Annotate mode — draw on the PDF pages</span>
+      <kbd>Alt+D / Alt+T</kbd><span>Notes pane: Draw / Text mode</span>
+      <kbd>P / H / E</kbd><span>Pen / Highlighter / Eraser (while drawing)</span>
+      <kbd>Ctrl+Z / Ctrl+Shift+Z</kbd><span>Undo / redo ink</span>
       <kbd>Esc</kbd><span>Back to the PDF</span>
     </div>
     <button class="btn" id="shortcutsClose">Close</button>

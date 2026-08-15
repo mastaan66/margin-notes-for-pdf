@@ -390,3 +390,48 @@ kbd { font-family: var(--font-note-mono); font-size: 11.5px; background: var(--b
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--fg); color: var(--bg);
   padding: 8px 14px; border-radius: 8px; box-shadow: var(--shadow); z-index: 200; font-size: 13px;
 }
+
+/* ---------- ink ---------- */
+.ink-toolbar { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.ink-btn {
+  display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 6px; border: 1px solid transparent;
+  background: transparent; cursor: pointer; color: var(--fg-muted); padding: 0;
+}
+.ink-btn svg { width: 16px; height: 16px; }
+.ink-btn:hover { background: var(--bg); color: var(--fg); }
+.ink-btn.active { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent); }
+.ink-btn.color::before { content: ""; width: 14px; height: 14px; border-radius: 50%; background: var(--c); box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.15); }
+.ink-btn.color.active { border-color: var(--fg); background: transparent; }
+.ink-btn.size i { display: block; border-radius: 50%; background: currentColor; }
+.ink-sep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; }
+
+.page-ink-bar {
+  position: absolute; top: 8px; left: 0; right: 0; margin: 0 auto; width: fit-content; z-index: 30; padding: 4px 6px; flex-wrap: nowrap;
+  background: var(--bg-elev); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); max-width: calc(100% - 24px);
+}
+.inkLayer { position: absolute; inset: 0; z-index: 4; pointer-events: none; touch-action: none; }
+body.annotating .inkLayer { pointer-events: auto; cursor: crosshair; }
+body.annotating .textLayer, body.annotating .annotLayer { pointer-events: none; }
+body.annotating.tool-eraser .inkLayer { cursor: cell; }
+body.annotating .page.current { outline-color: color-mix(in srgb, var(--accent) 90%, transparent); }
+
+.sketch { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 0 14px 6px; }
+#noteInkBar { padding: 2px 0 6px; }
+.sketch-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-elev); position: relative; overscroll-behavior: contain; }
+#sketchCanvas { display: block; width: 100%; touch-action: none; cursor: crosshair; --unit: 1px; }
+body.tool-eraser #sketchCanvas { cursor: cell; }
+#sketchCanvas.paper-lines { background-image: linear-gradient(to bottom, transparent calc(100% - 1px), color-mix(in srgb, var(--fg) 12%, transparent) calc(100% - 1px)); background-size: 100% calc(var(--unit) * 32); }
+#sketchCanvas.paper-grid { background-image: linear-gradient(to right, color-mix(in srgb, var(--fg) 9%, transparent) 1px, transparent 1px), linear-gradient(to bottom, color-mix(in srgb, var(--fg) 9%, transparent) 1px, transparent 1px); background-size: calc(var(--unit) * 24) calc(var(--unit) * 24); }
+#sketchCanvas.paper-dots { background-image: radial-gradient(color-mix(in srgb, var(--fg) 20%, transparent) 1px, transparent 1.2px); background-size: calc(var(--unit) * 24) calc(var(--unit) * 24); }
+.np-seg { display: inline-flex; }
+.np-seg .np-mini { border-radius: 0; position: relative; }
+.np-seg .np-mini:first-child { border-radius: 6px 0 0 6px; }
+.np-seg .np-mini:last-child { border-radius: 0 6px 6px 0; margin-left: -1px; }
+.np-mini .dot { display: none; position: absolute; top: -3px; right: -3px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.np-mini.has .dot { display: block; }
+.page.has-ink::after {
+  content: ""; position: absolute; top: 0; right: 0; width: 0; height: 0; z-index: 3; pointer-events: none;
+  border-style: solid; border-width: 0 16px 16px 0; border-color: transparent #1d4ed8 transparent transparent;
+}
+.page.has-note.has-ink::after { border-color: transparent #1d4ed8 transparent transparent; top: 16px; }
+.nc-tag { font-size: 11px; color: var(--accent-ink); background: var(--accent-soft); border-radius: 4px; padding: 0 5px; margin-left: 6px; }

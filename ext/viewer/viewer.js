@@ -2,6 +2,7 @@
 import * as pdfjsLib from "../lib/pdf.mjs";
 import { db, notesToMarkdown } from "./db.js";
 import { renderMarkdown } from "./markdown.js";
+import { InkSurface, buildInkToolbar, inkState, setInkState, onInkStateChange, drawStrokes, strokesToPng } from "./ink.js";
 
 const LIB = chrome.runtime.getURL("lib/");
 pdfjsLib.GlobalWorkerOptions.workerSrc = LIB + "pdf.worker.mjs";
@@ -18,11 +19,14 @@ const el = {
   allList: $("allList"), allFilter: $("allFilter"), allCount: $("allCount"), outline: $("outline"),
   recentList: $("recentList"), fileInput: $("fileInput"), dropZone: $("dropZone"), fileAccessWarn: $("fileAccessWarn"),
   loadError: $("loadError"), menu: $("menu"), toast: $("toast"), shortcuts: $("shortcuts"),
+  noteEditor: $("noteEditor"), sketch: $("sketch"), sketchWrap: $("sketchWrap"), sketchCanvas: $("sketchCanvas"),
+  noteInkBar: $("noteInkBar"), pageInkBar: $("pageInkBar"), btnModeText: $("btnModeText"), btnModeInk: $("btnModeInk"),
 };
 
 const DEFAULT_SETTINGS = {
   enabled: true, side: "left", splitRatio: 0.58, theme: "system", fontSize: 15, fontFamily: "serif", autoQuote: true,
   defaultZoom: "width", followScroll: true,
+  noteMode: "text", paper: "lines", touchDraws: true,
 };
 let settings = { ...DEFAULT_SETTINGS };
 
@@ -36,7 +40,10 @@ const S = {
   find: { query: "", results: [], perPage: new Map(), cur: -1, textCache: new Map(), token: 0, open: false },
   outlineItems: [], outlinePages: [],
   layoutTimer: null, io: null, sourceData: null,
+  ink: new Map(),          // `${target}:${page}` -> strokes[]   (target: note | page)
+  inkDirty: new Set(), inkSaveTimer: null, annotating: false, sketchSurface: null, lastInkSurface: null,
 };
+const SKETCH_UNITS = 600; // logical width of the sketch pad
 
 // ---------- helpers ----------
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -60,8 +67,11 @@ function applySettings() {
   document.documentElement.style.setProperty("--pdf-frac", settings.splitRatio);
   document.documentElement.style.setProperty("--note-size", settings.fontSize + "px");
   document.documentElement.style.setProperty("--font-note", `var(--font-note-${settings.fontFamily || "serif"})`);
+  el.sketchCanvas.className = `paper-${settings.paper || "lines"}`;
   scheduleLayout();
+  requestAnimationFrame(() => { refreshSketch(); for (const t of inkToolbars) t.refresh(); });
 }
+const inkToolbars = [];
 function saveSetting(patch) {
   Object.assign(settings, patch);
   chrome.storage.sync.set(patch);
@@ -196,7 +206,9 @@ async function onDocumentLoaded(pdf) {
   const notes = await db.getNotesForDoc(S.fp);
   S.notedPages = new Set(notes.map((n) => n.page));
   S.noteCache = new Map(notes.map((n) => [n.page, n.text]));
-  el.allCount.textContent = notes.length ? String(notes.length) : "";
+  S.ink = new Map();
+  for (const rec of await db.getInkForDoc(S.fp)) if (rec.strokes?.length) S.ink.set(`${rec.target}:${rec.page}`, rec.strokes);
+  updateAllCount();
 
   // pages
   const first = await pdf.getPage(1);
@@ -213,6 +225,7 @@ async function onDocumentLoaded(pdf) {
     ph.className = "placeholder"; ph.textContent = String(i);
     div.appendChild(ph);
     if (S.notedPages.has(i)) div.classList.add("has-note");
+    if (S.ink.has(`page:${i}`)) div.classList.add("has-ink");
     el.pages.appendChild(div);
     S.pages.push({ num: i, div, page: i === 1 ? first : null, w: v1.width, h: v1.height, rendered: false, renderTask: null, textLayer: null, renderScale: 0, visible: false, canvas: null, textDiv: null, annotDiv: null });
   }
@@ -223,6 +236,7 @@ async function onDocumentLoaded(pdf) {
   const target = parseHashPage() || (prev?.lastPage && prev.lastPage <= S.numPages ? prev.lastPage : 1);
   goToPage(target, { instant: true });
   setNotePage(target, { force: true });
+  setNoteMode(settings.noteMode || "text", { persist: false });
   loadOutline();
   prefetchPageSizes();
   el.scroll.focus({ preventScroll: true });
@@ -230,6 +244,10 @@ async function onDocumentLoaded(pdf) {
 
 async function teardown() {
   await saveNow();
+  await saveInkNow();
+  setAnnotating(false);
+  S.ink = new Map(); S.inkDirty.clear();
+  S.sketchSurface?.resetHistory();
   if (S.io) { S.io.disconnect(); S.io = null; }
   for (const p of S.pages) { try { p.renderTask?.cancel(); } catch { /* ignore */ } }
   if (S.pdf) { try { await S.pdf.destroy(); } catch { /* ignore */ } }
@@ -316,6 +334,8 @@ function unrender(p) {
   if (p.canvas) { p.canvas.width = 0; p.canvas.height = 0; p.canvas.remove(); p.canvas = null; }
   if (p.textDiv) { p.textDiv.remove(); p.textDiv = null; p.textLayer = null; }
   if (p.annotDiv) { p.annotDiv.remove(); p.annotDiv = null; }
+  if (p.inkSurface) { p.inkSurface.destroy(); p.inkSurface = null; }
+  if (p.inkCanvas) { p.inkCanvas.width = 0; p.inkCanvas.remove(); p.inkCanvas = null; }
 }
 function updateZoomSelect() {
   const custom = el.zoomSelect.querySelector('option[value="custom"]');
@@ -396,6 +416,8 @@ async function ensureRendered(p) {
     } catch (e) { if (!(e instanceof pdfjsLib.AbortException)) console.warn("text layer", e); }
     // link annotations
     renderLinks(p, viewport).catch(() => {});
+    // ink layer (handwriting on the page)
+    mountPageInk(p, viewport);
   } catch (e) {
     p.renderTask = null;
     if (!(e instanceof pdfjsLib.RenderingCancelledException)) console.warn("render page", p.num, e);
@@ -507,15 +529,24 @@ function persistLastPage(now = false) {
 
 // ---------- notes ----------
 function noteLabel(n) { return n === 0 ? "Document notes" : `Page ${n}`; }
+function pageHasContent(n) { return S.notedPages.has(n) || S.ink.has(`note:${n}`) || S.ink.has(`page:${n}`); }
+function contentPages() {
+  const set = new Set(S.notedPages);
+  for (const k of S.ink.keys()) set.add(parseInt(k.split(":")[1], 10));
+  return set;
+}
+function updateAllCount() { const n = [...contentPages()].filter((p) => p >= 0).length; el.allCount.textContent = n ? String(n) : ""; }
+function updateModeDots() {
+  el.btnModeText.classList.toggle("has", !!(S.noteCache.get(S.notePage) || "").trim());
+  el.btnModeInk.classList.toggle("has", !!S.ink.get(`note:${S.notePage}`)?.length);
+}
 async function setNotePage(n, { force = false } = {}) {
   if (!force && n === S.notePage && S.noteLoadedFor === n) return;
   await saveNow();
   S.notePage = n;
   el.npPageLabel.textContent = noteLabel(n);
   el.npDocBtn.classList.toggle("active", n === 0);
-  let text = S.noteCache.get(n);
-  if (text == null) { const rec = await db.getNote(S.fp, n); text = rec?.text || ""; if (text) S.noteCache.set(n, text); }
-  if (S.notePage !== n) return; // switched again meanwhile
+  const text = S.noteCache.get(n) || ""; // cache holds every note of this doc (loaded at open, kept in sync on save)
   el.noteText.value = text;
   S.noteLoadedFor = n; S.dirty = false;
   updateWordCount();
@@ -523,6 +554,8 @@ async function setNotePage(n, { force = false } = {}) {
   if (!el.notePreview.hidden) renderPreview();
   renderNoteStrip();
   updateAllListCurrent();
+  updateModeDots();
+  refreshSketch();
 }
 function scheduleSave() {
   S.dirty = true;
@@ -544,9 +577,10 @@ async function saveNow() {
   } catch (e) { el.saveStatus.textContent = "Save failed"; console.error(e); }
   if (had !== has) {
     S.pages[page - 1]?.div.classList.toggle("has-note", has);
-    el.allCount.textContent = S.notedPages.size ? String(S.notedPages.size) : "";
-    updateDoc({ notesCount: S.notedPages.size });
+    updateAllCount();
+    updateDoc({ notesCount: contentPages().size });
     renderNoteStrip();
+    updateModeDots();
   }
   if (document.querySelector('.tab-panel[data-panel="all"]').classList.contains("active")) renderAllList();
 }
@@ -574,7 +608,7 @@ function renderNoteStrip() {
     const from = Math.floor(t * per) + 1, to = Math.max(from, Math.floor((t + 1) * per));
     const i = document.createElement("i");
     let noted = false, firstNoted = 0;
-    for (let pg = from; pg <= to; pg++) if (S.notedPages.has(pg)) { noted = true; firstNoted = pg; break; }
+    for (let pg = from; pg <= to; pg++) if (pageHasContent(pg)) { noted = true; firstNoted = pg; break; }
     if (noted) i.classList.add("noted");
     if (S.notePage >= from && S.notePage <= to) i.classList.add("cur");
     i.title = from === to ? `Page ${from}` : `Pages ${from}–${to}`;
@@ -584,7 +618,7 @@ function renderNoteStrip() {
   el.noteStrip.replaceChildren(frag);
 }
 function jumpNoted(dir) {
-  const pages = [...S.notedPages].filter((p) => p > 0).sort((a, b) => a - b);
+  const pages = [...contentPages()].filter((p) => p > 0).sort((a, b) => a - b);
   if (!pages.length) { toast("No page notes yet"); return; }
   const cur = S.notePage || S.currentPage;
   const next = dir > 0 ? pages.find((p) => p > cur) : [...pages].reverse().find((p) => p < cur);
@@ -632,7 +666,7 @@ function quoteSelectionIntoNotes() {
 // All-notes tab
 function renderAllList() {
   const q = el.allFilter.value.trim().toLowerCase();
-  const entries = [...S.noteCache.entries()].sort((a, b) => a[0] - b[0]).filter(([, t]) => !q || t.toLowerCase().includes(q));
+  const entries = [...contentPages()].sort((a, b) => a - b).map((pg) => [pg, S.noteCache.get(pg) || ""]).filter(([, t]) => !q || t.toLowerCase().includes(q));
   if (!entries.length) { el.allList.innerHTML = `<div class="empty">${q ? "No notes match." : "No notes yet. Start typing on the Page notes tab."}</div>`; return; }
   const frag = document.createDocumentFragment();
   for (const [page, text] of entries) {
@@ -641,10 +675,12 @@ function renderAllList() {
     card.dataset.page = String(page);
     const head = document.createElement("div"); head.className = "nc-head";
     const b = document.createElement("b"); b.textContent = noteLabel(page);
-    const w = document.createElement("span"); const wc = text.trim().split(/\s+/).length; w.textContent = `${wc} word${wc === 1 ? "" : "s"}`;
+    if (S.ink.has(`note:${page}`)) { const t = document.createElement("span"); t.className = "nc-tag"; t.textContent = "✎ sketch"; b.appendChild(t); }
+    if (S.ink.has(`page:${page}`)) { const t = document.createElement("span"); t.className = "nc-tag"; t.textContent = "✎ on page"; b.appendChild(t); }
+    const w = document.createElement("span"); const wc = text.trim() ? text.trim().split(/\s+/).length : 0; w.textContent = wc ? `${wc} word${wc === 1 ? "" : "s"}` : "";
     head.append(b, w);
     const body = document.createElement("div"); body.className = "nc-body" + (text.length > 320 || text.split("\n").length > 6 ? " long" : "");
-    body.textContent = text.length > 700 ? text.slice(0, 700) + "…" : text;
+    body.textContent = text ? (text.length > 700 ? text.slice(0, 700) + "…" : text) : "(handwritten only)";
     card.append(head, body);
     card.addEventListener("click", () => {
       if (page > 0) goToPage(page);
@@ -664,6 +700,168 @@ function switchTab(name) {
   for (const t of document.querySelectorAll(".notes-tabs .tab")) t.classList.toggle("active", t.dataset.tab === name);
   for (const p of document.querySelectorAll(".tab-panel")) p.classList.toggle("active", p.dataset.panel === name);
   if (name === "all") renderAllList();
+}
+
+// ---------- ink: shared ----------
+function inkKey(target, page) { return `${target}:${page}`; }
+function getInk(target, page) { return S.ink.get(inkKey(target, page)) || []; }
+function setInk(target, page, strokes) {
+  const key = inkKey(target, page);
+  if (strokes && strokes.length) S.ink.set(key, strokes); else S.ink.delete(key);
+}
+function markInkDirty(target, page) {
+  S.inkDirty.add(inkKey(target, page));
+  clearTimeout(S.inkSaveTimer);
+  S.inkSaveTimer = setTimeout(saveInkNow, 400);
+  // indicators
+  const has = S.ink.has(inkKey(target, page));
+  if (target === "page") S.pages[page - 1]?.div.classList.toggle("has-ink", has);
+  updateAllCount(); renderNoteStrip(); updateModeDots();
+  updateDoc({ notesCount: contentPages().size });
+  if (document.querySelector('.tab-panel[data-panel="all"]').classList.contains("active")) renderAllList();
+}
+async function saveInkNow() {
+  clearTimeout(S.inkSaveTimer);
+  if (!S.fp || !S.inkDirty.size) return;
+  const keys = [...S.inkDirty]; S.inkDirty.clear();
+  for (const k of keys) {
+    const [target, pg] = k.split(":");
+    try { await db.putInk(S.fp, target, parseInt(pg, 10), S.ink.get(k) || []); } catch (e) { console.error("ink save", e); S.inkDirty.add(k); }
+  }
+}
+function activeInkSurface() {
+  if (S.annotating && !(S.noteMode === "ink" && el.notesPane.contains(document.activeElement))) return S.pages[S.currentPage - 1]?.inkSurface || S.lastInkSurface;
+  if (S.noteMode === "ink") return S.sketchSurface;
+  return S.lastInkSurface;
+}
+onInkStateChange(() => { document.body.classList.toggle("tool-eraser", inkState.tool === "eraser"); });
+
+// ---------- ink: sketch pad in the notes pane ----------
+function sketchUnit() { return Math.max(0.2, el.sketchCanvas.clientWidth / SKETCH_UNITS); }
+function setupSketch() {
+  const canvas = el.sketchCanvas;
+  S.sketchSurface = new InkSurface({
+    canvas,
+    toLogical: (cx, cy) => { const u = sketchUnit(); return [cx / u, cy / u]; },
+    toCanvas: (lx, ly) => { const u = sketchUnit(); return [lx * u, ly * u]; },
+    lineScale: () => sketchUnit(),
+    getStrokes: () => getInk("note", S.notePage),
+    setStrokes: (st) => setInk("note", S.notePage, st),
+    onChange: () => { markInkDirty("note", S.notePage); growSketch(); },
+    onPaper: false,
+    touchDraws: () => settings.touchDraws !== false,
+  });
+  canvas.addEventListener("pointerdown", () => { S.lastInkSurface = S.sketchSurface; });
+  inkToolbars.push(buildInkToolbar(el.noteInkBar, {
+    undo: () => S.sketchSurface.undo(), redo: () => S.sketchSurface.redo(),
+    clear: () => { if (confirm("Clear this page's sketch?")) S.sketchSurface.clear(); },
+    extra: [{
+      title: "Paper: lines / grid / dots / blank",
+      svg: '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M4 14h16"/></svg>',
+      onClick: () => { const order = ["lines", "grid", "dots", "blank"]; saveSetting({ paper: order[(order.indexOf(settings.paper) + 1) % order.length] }); },
+    }],
+  }));
+  new ResizeObserver(() => refreshSketch()).observe(el.sketchWrap);
+}
+function growSketch() {
+  const u = sketchUnit();
+  let maxY = 0;
+  for (const s of getInk("note", S.notePage)) for (const pt of s.points) if (pt[1] > maxY) maxY = pt[1];
+  const need = Math.max(el.sketchWrap.clientHeight, (maxY + 260) * u);
+  const cur = parseFloat(el.sketchCanvas.style.height) || 0;
+  if (Math.abs(need - cur) > 2) { el.sketchCanvas.style.height = need + "px"; S.sketchSurface.resize(); }
+}
+function refreshSketch() {
+  if (!S.sketchSurface || el.sketch.hidden) return;
+  el.sketchCanvas.style.setProperty("--unit", sketchUnit() + "px");
+  growSketch();
+  S.sketchSurface.resize();
+}
+function setNoteMode(mode, { persist = true } = {}) {
+  S.noteMode = mode;
+  const ink = mode === "ink";
+  el.noteEditor.hidden = ink; el.sketch.hidden = !ink;
+  el.btnModeText.classList.toggle("active", !ink); el.btnModeInk.classList.toggle("active", ink);
+  $("btnPreview").hidden = ink;
+  if (ink) { S.sketchSurface?.resetHistory(); requestAnimationFrame(refreshSketch); }
+  if (persist) saveSetting({ noteMode: mode });
+}
+
+// ---------- ink: drawing on the PDF pages ----------
+function mountPageInk(p, viewport) {
+  if (p.inkSurface) { p.inkSurface.destroy(); p.inkSurface = null; }
+  if (p.inkCanvas) p.inkCanvas.remove();
+  const canvas = document.createElement("canvas");
+  canvas.className = "inkLayer";
+  p.div.appendChild(canvas);
+  p.inkCanvas = canvas;
+  const num = p.num;
+  p.inkSurface = new InkSurface({
+    canvas,
+    toLogical: (cx, cy) => viewport.convertToPdfPoint(cx, cy),
+    toCanvas: (lx, ly) => viewport.convertToViewportPoint(lx, ly),
+    lineScale: () => viewport.scale,
+    getStrokes: () => getInk("page", num),
+    setStrokes: (st) => setInk("page", num, st),
+    onChange: () => markInkDirty("page", num),
+    onPaper: true,
+    isEnabled: () => S.annotating,
+    touchDraws: () => settings.touchDraws !== false,
+  });
+  canvas.addEventListener("pointerdown", () => { S.lastInkSurface = p.inkSurface; });
+}
+function setAnnotating(on) {
+  S.annotating = !!on;
+  document.body.classList.toggle("annotating", S.annotating);
+  $("btnAnnotate").classList.toggle("active", S.annotating);
+  el.pageInkBar.hidden = !S.annotating;
+  if (S.annotating) { el.selBubble.hidden = true; window.getSelection()?.removeAllRanges(); el.scroll.focus(); }
+}
+function setupPageInkBar() {
+  inkToolbars.push(buildInkToolbar(el.pageInkBar, {
+    undo: () => S.pages[S.currentPage - 1]?.inkSurface?.undo(),
+    redo: () => S.pages[S.currentPage - 1]?.inkSurface?.redo(),
+    clear: () => { if (confirm(`Clear handwriting on page ${S.currentPage}?`)) S.pages[S.currentPage - 1]?.inkSurface?.clear(); },
+    extra: [{
+      title: "Done annotating (A / Esc)",
+      svg: '<svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>',
+      onClick: () => setAnnotating(false),
+    }],
+  }, { onPaper: true }));
+}
+
+// ---------- ink: export ----------
+async function pageInkPng(num, { withPage = true } = {}) {
+  const p = S.pages[num - 1];
+  const strokes = getInk("page", num);
+  if (!p.page) p.page = await S.pdf.getPage(num);
+  const scale = 2;
+  const vp = p.page.getViewport({ scale });
+  const c = document.createElement("canvas"); c.width = Math.floor(vp.width); c.height = Math.floor(vp.height);
+  const ctx = c.getContext("2d");
+  if (withPage) await p.page.render({ canvasContext: ctx, viewport: vp }).promise;
+  else { ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height); }
+  drawStrokes(ctx, strokes, (x, y) => vp.convertToViewportPoint(x, y), scale, true);
+  return new Promise((r) => c.toBlob(r, "image/png"));
+}
+async function sketchPng(page) {
+  const strokes = getInk("note", page);
+  let maxY = 0; for (const s of strokes) for (const pt of s.points) maxY = Math.max(maxY, pt[1]);
+  const u = 2; // 2 px per unit → 1200px wide
+  return strokesToPng(strokes, { width: SKETCH_UNITS * u, height: Math.ceil((maxY + 40) * u), toCanvas: (x, y) => [x * u, y * u], lineScale: u, background: "#ffffff", onPaper: true });
+}
+function downloadBlob(name, blob) {
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+async function exportInk(pages) {
+  const base = safeName(S.doc?.title || S.filename);
+  let n = 0;
+  for (const pg of pages) {
+    if (S.ink.has(`page:${pg}`)) { downloadBlob(`${base}-p${pg}-annotated.png`, await pageInkPng(pg)); n++; await new Promise((r) => setTimeout(r, 250)); }
+    if (S.ink.has(`note:${pg}`)) { downloadBlob(`${base}-p${pg}-sketch.png`, await sketchPng(pg)); n++; await new Promise((r) => setTimeout(r, 250)); }
+  }
+  toast(n ? `Exported ${n} PNG${n === 1 ? "" : "s"}` : "No handwriting to export");
 }
 
 // ---------- outline ----------
@@ -850,8 +1048,8 @@ function downloadText(name, text, type = "text/markdown") {
 async function menuAction(act) {
   el.menu.hidden = true;
   switch (act) {
-    case "exportMd": { await saveNow(); const notes = await db.getNotesForDoc(S.fp); downloadText(`${safeName(S.doc?.title || S.filename)}-notes.md`, notesToMarkdown(S.doc, notes)); break; }
-    case "exportJson": { await saveNow(); const notes = await db.getNotesForDoc(S.fp); downloadText(`${safeName(S.doc?.title || S.filename)}-notes.json`, JSON.stringify({ version: 1, docs: [S.doc], notes }, null, 2), "application/json"); break; }
+    case "exportMd": { await saveNow(); await saveInkNow(); const notes = await db.getNotesForDoc(S.fp); const ink = await db.getInkForDoc(S.fp); downloadText(`${safeName(S.doc?.title || S.filename)}-notes.md`, notesToMarkdown(S.doc, notes, ink)); break; }
+    case "exportJson": { await saveNow(); await saveInkNow(); const notes = await db.getNotesForDoc(S.fp); const ink = await db.getInkForDoc(S.fp); downloadText(`${safeName(S.doc?.title || S.filename)}-notes.json`, JSON.stringify({ version: 2, docs: [S.doc], notes, ink }, null, 2), "application/json"); break; }
     case "copyAll": { await saveNow(); const notes = await db.getNotesForDoc(S.fp); await navigator.clipboard.writeText(notesToMarkdown(S.doc, notes)); toast("Copied all notes as Markdown"); break; }
     case "download": {
       try {
@@ -874,6 +1072,8 @@ async function menuAction(act) {
       else toast("Download the PDF and print it from Chrome's viewer.");
       break;
     }
+    case "exportInkPage": await saveInkNow(); await exportInk([S.notePage || S.currentPage]); break;
+    case "exportInkAll": { await saveInkNow(); const pages = [...new Set([...S.ink.keys()].map((k) => parseInt(k.split(":")[1], 10)))].sort((a, b) => a - b); await exportInk(pages); break; }
     case "shortcuts": el.shortcuts.hidden = false; break;
     case "options": chrome.runtime.sendMessage({ type: "openOptions" }); break;
   }
@@ -893,6 +1093,9 @@ function wireEvents() {
   el.zoomSelect.addEventListener("change", () => { const v = el.zoomSelect.value; if (v === "width" || v === "page") setZoom(v); else if (v !== "custom") setZoom("custom", parseFloat(v)); el.scroll.focus(); });
   $("btnRotate").addEventListener("click", rotate);
   $("btnFind").addEventListener("click", () => (S.find.open ? closeFind() : openFind()));
+  $("btnAnnotate").addEventListener("click", () => setAnnotating(!S.annotating));
+  el.btnModeText.addEventListener("click", () => setNoteMode("text"));
+  el.btnModeInk.addEventListener("click", () => setNoteMode("ink"));
   $("btnNight").addEventListener("click", () => { document.body.classList.toggle("night"); $("btnNight").classList.toggle("active", document.body.classList.contains("night")); });
   $("btnSide").addEventListener("click", () => saveSetting({ side: settings.side === "left" ? "right" : "left" }));
   $("btnNotesToggle").addEventListener("click", toggleNotes);
@@ -991,8 +1194,8 @@ function wireEvents() {
   // global keys
   document.addEventListener("keydown", onGlobalKeydown);
   window.addEventListener("hashchange", () => { const p = parseHashPage(); if (p) goToPage(p); });
-  window.addEventListener("pagehide", () => { persistLastPage(true); saveNow(); });
-  document.addEventListener("visibilitychange", () => { if (document.hidden) { persistLastPage(true); saveNow(); } });
+  window.addEventListener("pagehide", () => { persistLastPage(true); saveNow(); saveInkNow(); });
+  document.addEventListener("visibilitychange", () => { if (document.hidden) { persistLastPage(true); saveNow(); saveInkNow(); } });
 }
 
 function toggleNotes() {
@@ -1061,6 +1264,12 @@ function onGlobalKeydown(e) {
     if (k === "n") { e.preventDefault(); if (document.body.classList.contains("notes-hidden")) toggleNotes(); if (document.activeElement === el.noteText) { el.noteText.blur(); el.scroll.focus(); } else { switchTab("page"); el.noteText.focus(); } return; }
     if (k === "s") { e.preventDefault(); saveSetting({ side: settings.side === "left" ? "right" : "left" }); return; }
     if (k === "p") { e.preventDefault(); togglePin(); return; }
+    if (k === "d") { e.preventDefault(); if (document.body.classList.contains("notes-hidden")) toggleNotes(); switchTab("page"); setNoteMode("ink"); return; }
+    if (k === "t") { e.preventDefault(); if (document.body.classList.contains("notes-hidden")) toggleNotes(); switchTab("page"); setNoteMode("text"); el.noteText.focus(); return; }
+  }
+  if (mod && !inEdit && e.key.toLowerCase() === "z") {
+    const surf = activeInkSurface();
+    if (surf) { e.preventDefault(); if (e.shiftKey) surf.redo(); else surf.undo(); return; }
   }
   if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); openFind(); return; }
   if (mod && e.key.toLowerCase() === "q") { e.preventDefault(); quoteSelectionIntoNotes(); return; }
@@ -1071,6 +1280,7 @@ function onGlobalKeydown(e) {
   if (e.key === "Escape") {
     if (!el.shortcuts.hidden) { el.shortcuts.hidden = true; return; }
     if (S.find.open) { closeFind(); return; }
+    if (S.annotating) { setAnnotating(false); return; }
     if (!el.menu.hidden) { el.menu.hidden = true; return; }
     el.selBubble.hidden = true;
     return;
@@ -1085,6 +1295,10 @@ function onGlobalKeydown(e) {
     case "-": e.preventDefault(); zoomBy(1 / 1.15); break;
     case "0": e.preventDefault(); setZoom("width"); break;
     case "r": e.preventDefault(); rotate(); break;
+    case "a": e.preventDefault(); setAnnotating(!S.annotating); break;
+    case "p": if (S.annotating || S.noteMode === "ink") { e.preventDefault(); setInkState({ tool: "pen" }); } break;
+    case "h": if (S.annotating || S.noteMode === "ink") { e.preventDefault(); setInkState({ tool: "hl" }); } break;
+    case "e": if (S.annotating || S.noteMode === "ink") { e.preventDefault(); setInkState({ tool: "eraser" }); } break;
     case "/": e.preventDefault(); openFind(); break;
     case "?": e.preventDefault(); el.shortcuts.hidden = false; break;
     case "Home": if (e.target === el.scroll || e.target === document.body) { e.preventDefault(); goToPage(1); } break;
@@ -1096,6 +1310,8 @@ function onGlobalKeydown(e) {
 (async function main() {
   await loadSettings();
   wireEvents();
+  setupSketch();
+  setupPageInkBar();
   $("btnNotesToggle").classList.add("active");
   const url = parseFileParam();
   if (url) await openFromUrl(url);
