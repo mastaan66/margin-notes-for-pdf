@@ -23,7 +23,12 @@ const el = {
   loadError: $("loadError"), menu: $("menu"), toast: $("toast"), shortcuts: $("shortcuts"), hostPermWarn: $("hostPermWarn"),
   noteEditor: $("noteEditor"), sketch: $("sketch"), sketchWrap: $("sketchWrap"), sketchCanvas: $("sketchCanvas"),
   noteInkBar: $("noteInkBar"), pageInkBar: $("pageInkBar"), btnModeText: $("btnModeText"), btnModeInk: $("btnModeInk"),
+  webWrap: $("webWrap"), webFrame: $("webFrame"), webHint: $("webHint"), pageKind: $("pageKind"), btnAnchor: $("btnAnchor"), btnPlay: $("btnPlay"),
+  urlInput: $("urlInput"), panelEmpty: $("panelEmpty"),
 };
+const HOST = new URLSearchParams(location.search).has("panel") ? "panel" : "tab";
+const PANEL_TAB = parseInt(new URLSearchParams(location.search).get("tab") || "", 10) || null; // debug/testing: follow a fixed tab id
+const DOCKABLE_RE = /^(https?|file):\/\//i;
 
 const DEFAULT_SETTINGS = {
   enabled: true, side: "left", splitRatio: 0.58, theme: "system", fontSize: 15, fontFamily: "serif", autoQuote: true,
@@ -44,6 +49,8 @@ const S = {
   layoutTimer: null, io: null, sourceData: null,
   ink: new Map(),          // `${target}:${page}` -> strokes[]   (target: note | page)
   inkDirty: new Set(), inkSaveTimer: null, annotating: false, sketchSurface: null, lastInkSurface: null,
+  mode: null,              // "pdf" | "web"
+  web: null,               // web/video mode state, see openWebCommon()
 };
 const SKETCH_UNITS = 600; // logical width of the sketch pad
 
@@ -70,6 +77,7 @@ function applySettings() {
   document.documentElement.style.setProperty("--note-size", settings.fontSize + "px");
   document.documentElement.style.setProperty("--font-note", `var(--font-note-${settings.fontFamily || "serif"})`);
   el.sketchCanvas.className = `paper-${settings.paper || "lines"}`;
+  if (S.web) agentSend({ type: "mn:quoteEnabled", on: settings.autoQuote !== false });
   scheduleLayout();
   requestAnimationFrame(() => { refreshSketch(); for (const t of inkToolbars) t.refresh(); });
 }
@@ -95,6 +103,14 @@ function parseFileParam() {
   if (/^[a-z][a-z0-9+.-]*%3A/i.test(u)) { try { u = decodeURIComponent(u); } catch { /* keep raw */ } }
   return u || null;
 }
+function parseWebParam() {
+  const q = location.search;
+  const i = q.indexOf("web=");
+  if (i < 0) return null;
+  let u = q.slice(i + 4);
+  if (/^[a-z][a-z0-9+.-]*%3A/i.test(u)) { try { u = decodeURIComponent(u); } catch { /* keep raw */ } }
+  return u || null;
+}
 function parseHashPage() {
   const m = /(?:^|[#&])page=(\d+)/.exec(location.hash);
   return m ? parseInt(m[1], 10) : null;
@@ -109,6 +125,7 @@ function setLoadProgress(p) {
 }
 
 async function openFromUrl(url) {
+  await teardownWeb(); setMode("pdf");
   S.url = url;
   S.filename = pdfjsLib.getPdfFilenameFromUrl(url) || "document.pdf";
   showViewer();
@@ -135,6 +152,7 @@ async function openFromUrl(url) {
 }
 
 async function openFromData(data, filename) {
+  await teardownWeb(); setMode("pdf");
   S.url = null;
   S.filename = filename || "document.pdf";
   S.sourceData = data;
@@ -172,14 +190,22 @@ async function showLoadError(e, url) {
 
 function showViewer() {
   el.landing.hidden = true; el.toolbar.hidden = false; el.split.hidden = false;
-  el.loadError.hidden = true;
+  el.loadError.hidden = true; el.panelEmpty.hidden = true;
 }
 function showLanding() {
   el.landing.hidden = false; el.toolbar.hidden = true; el.split.hidden = true;
   document.title = "Margin Notes";
+  setMode(null);
   refreshRecents();
   checkFileAccess();
   checkHostAccess();
+}
+function setMode(mode) {
+  S.mode = mode;
+  document.body.dataset.mode = mode || "";
+  if (mode !== "web") { document.body.dataset.kind = ""; if (HOST !== "panel") document.body.dataset.host = ""; }
+  el.webWrap.hidden = mode !== "web";
+  el.pageKind.hidden = mode !== "web";
 }
 async function checkFileAccess() {
   try {
@@ -199,10 +225,13 @@ async function checkHostAccess() {
 async function onDocumentLoaded(pdf) {
   setLoadProgress(100);
   await teardown();
+  await teardownWeb();
+  setMode("pdf");
   S.pdf = pdf;
   S.numPages = pdf.numPages;
   S.fp = pdf.fingerprints?.[0] || `nofp-${S.filename}-${pdf.numPages}`;
   el.pageCount.textContent = String(S.numPages);
+  el.noteText.placeholder = "Notes for this page… (Markdown ok: **bold**, - lists, > quotes, - [ ] tasks, p.12 links to page 12)";
 
   let title = null;
   try {
@@ -360,13 +389,14 @@ function updateZoomSelect() {
   else { custom.hidden = false; custom.textContent = `${pct}%`; el.zoomSelect.value = "custom"; }
 }
 function setZoom(mode, value) {
+  if (S.mode === "web") { const z = mode === "custom" ? clamp(value, 0.3, 3) : 1; S.web.zoom = z; agentSend({ type: "mn:zoom", z }); el.zoomSelect.value = z === 1 ? "width" : "custom"; toast(`Zoom ${Math.round(z * 100)}%`); return; }
   if (mode === "width" || mode === "page") S.zoomMode = mode;
   else { S.zoomMode = "custom"; S.scale = clamp(value, 0.2, 6); }
   layout();
   updateDoc({ zoomMode: S.zoomMode });
 }
-function zoomBy(f) { setZoom("custom", (S.zoomMode === "custom" ? S.scale : computeScale()) * f); }
-function rotate() { S.rotation = (S.rotation + 90) % 360; layout(); }
+function zoomBy(f) { if (S.mode === "web") return setZoom("custom", (S.web?.zoom || 1) * f); setZoom("custom", (S.zoomMode === "custom" ? S.scale : computeScale()) * f); }
+function rotate() { if (S.mode === "web") return; S.rotation = (S.rotation + 90) % 360; layout(); }
 
 // ---------- rendering ----------
 function setupObserver() {
@@ -499,6 +529,7 @@ async function navigateToDest(dest) {
 
 // ---------- navigation ----------
 function goToPage(n, { instant = false, offset = 0 } = {}) {
+  if (S.mode === "web") return webGoTo(n);
   n = clamp(Math.round(n), 1, S.numPages || 1);
   const p = S.pages[n - 1];
   if (!p) return;
@@ -522,13 +553,15 @@ function updateCurrentPage() {
   if (n !== S.currentPage) { S.currentPage = n; onCurrentPageChanged(); }
 }
 function onCurrentPageChanged() {
-  el.pageInput.value = String(S.currentPage);
+  el.pageInput.value = pageInputText(S.currentPage);
   for (const d of el.pages.querySelectorAll(".page.current")) d.classList.remove("current");
   S.pages[S.currentPage - 1]?.div.classList.add("current");
-  if (!S.pinned && S.notePage !== 0) setNotePage(S.currentPage);
+  if (isVideo()) { if (!S.pinned) { const t = followTarget(); if (t !== S.notePage) setNotePage(t); } }
+  else if (!S.pinned && S.notePage !== 0) setNotePage(S.currentPage);
   updateOutlineCurrent();
   persistLastPage();
 }
+function pageInputText(n) { return isVideo() ? fmtClock(n) : String(n); }
 function updateDoc(patch) {
   if (!S.fp) return;
   S.doc = { ...(S.doc || { fp: S.fp, created: Date.now() }), ...patch, fp: S.fp, lastOpened: Date.now() };
@@ -537,12 +570,23 @@ function updateDoc(patch) {
 let lastPageTimer = null, lastPagePersisted = 0;
 function persistLastPage(now = false) {
   clearTimeout(lastPageTimer);
-  const write = () => { if (S.fp && lastPagePersisted !== S.currentPage) { lastPagePersisted = S.currentPage; updateDoc({ lastPage: S.currentPage }); } };
+  const write = () => { if (S.fp && lastPagePersisted !== S.currentPage && !(isVideo() && !now && Math.abs(S.currentPage - lastPagePersisted) < 15)) { lastPagePersisted = S.currentPage; updateDoc({ lastPage: S.currentPage }); } };
   if (now) write(); else lastPageTimer = setTimeout(write, 150);
 }
 
 // ---------- notes ----------
-function noteLabel(n) { return n === 0 ? "Document notes" : `Page ${n}`; }
+function noteLabel(n) {
+  if (S.mode === "web") {
+    if (isVideo()) return n === 0 ? "Whole video" : `At ${fmtClock(n)}`;
+    if (n === 0) return "Whole page";
+    const hs = S.web?.headings || [];
+    if (!hs.length) return "This page";
+    if (n === 1) return "Top of page";
+    const h = hs[n - 2];
+    return h ? `§${n - 1} ${h.text.length > 34 ? h.text.slice(0, 33) + "…" : h.text}` : `§${n - 1}`;
+  }
+  return n === 0 ? "Document notes" : `Page ${n}`;
+}
 function pageHasContent(n) { return S.notedPages.has(n) || S.ink.has(`note:${n}`) || S.ink.has(`page:${n}`); }
 function contentPages() {
   const set = new Set(S.notedPages);
@@ -557,8 +601,10 @@ function updateModeDots() {
 async function setNotePage(n, { force = false } = {}) {
   if (!force && n === S.notePage && S.noteLoadedFor === n) return;
   await saveNow();
+  if (S.web && S.web.pendingAnchor != null && n !== S.web.pendingAnchor && !pageHasContent(S.web.pendingAnchor)) S.web.pendingAnchor = null;
   S.notePage = n;
   el.npPageLabel.textContent = noteLabel(n);
+  el.npPageLabel.title = S.mode === "web" && !isVideo() && n >= 2 ? (S.web?.headings?.[n - 2]?.text || "") : "";
   el.npDocBtn.classList.toggle("active", n === 0);
   const text = S.noteCache.get(n) || ""; // cache holds every note of this doc (loaded at open, kept in sync on save)
   el.noteText.value = text;
@@ -628,7 +674,7 @@ function renderNoteStrip() {
     for (let pg = from; pg <= to; pg++) if (pageHasContent(pg)) { noted = true; firstNoted = pg; break; }
     if (noted) i.classList.add("noted");
     if (S.notePage >= from && S.notePage <= to) i.classList.add("cur");
-    i.title = from === to ? `Page ${from}` : `Pages ${from}–${to}`;
+    i.title = isVideo() ? (from === to ? fmtClock(from) : `${fmtClock(from)}–${fmtClock(to)}`) : S.mode === "web" ? noteLabel(from) : from === to ? `Page ${from}` : `Pages ${from}–${to}`;
     i.dataset.page = String(firstNoted || from);
     frag.appendChild(i);
   }
@@ -662,11 +708,17 @@ function quoteSelectionIntoNotes() {
   const node = sel.anchorNode?.nodeType === 1 ? sel.anchorNode : sel.anchorNode?.parentElement;
   const pageDiv = node?.closest?.(".page");
   const page = pageDiv ? parseInt(pageDiv.dataset.page, 10) : S.currentPage;
+  insertQuote(text, page, ` (p.${page})`);
+  sel.removeAllRanges();
+  el.selBubble.hidden = true;
+}
+// Append a "> quote" to the note for `page` (or the doc-level note if that's what's open).
+function insertQuote(text, page, docSuffix = "") {
   const doInsert = () => {
     const ta = el.noteText;
     if (S.notePage !== 0 && S.notePage !== page) return;
     const prefix = ta.value.length && !ta.value.endsWith("\n") ? (ta.value.endsWith("\n\n") ? "" : "\n\n") : ta.value.length ? "\n" : "";
-    const quote = `> ${text}${S.notePage === 0 ? ` (p.${page})` : ""}\n\n`;
+    const quote = `> ${text}${S.notePage === 0 ? docSuffix : ""}\n\n`;
     ta.setRangeText(prefix + quote, ta.value.length, ta.value.length, "end");
     ta.dispatchEvent(new Event("input", { bubbles: true }));
     if (el.noteText.hidden) togglePreview(false);
@@ -676,8 +728,6 @@ function quoteSelectionIntoNotes() {
   };
   if (S.notePage === 0 || S.notePage === page) doInsert();
   else { setNotePage(page).then(doInsert); }
-  sel.removeAllRanges();
-  el.selBubble.hidden = true;
 }
 
 // All-notes tab
@@ -1042,10 +1092,18 @@ async function refreshRecents() {
     const t = document.createElement("div"); t.className = "r-title"; t.textContent = d.title || d.filename || "Untitled";
     const m = document.createElement("div"); m.className = "r-meta";
     const cnt = await db.countNotesForDoc(d.fp);
-    m.textContent = `${cnt} note${cnt === 1 ? "" : "s"} · ${d.pageCount || "?"} pages · last opened ${new Date(d.lastOpened || 0).toLocaleDateString()}${d.url ? " · " + d.url : " · (opened from local file picker)"}`;
+    const isWeb = d.kind === "web" || d.kind === "video";
+    if (isWeb) { const k = document.createElement("span"); k.className = "r-kind"; k.textContent = d.kind === "video" ? "video" : "web"; t.prepend(k); }
+    const size = d.kind === "video" ? (d.duration ? fmtClock(d.duration) : "video") : d.kind === "web" ? `${Math.max(0, (d.pageCount || 1) - 1)} sections` : `${d.pageCount || "?"} pages`;
+    m.textContent = `${cnt} note${cnt === 1 ? "" : "s"} · ${size} · last opened ${new Date(d.lastOpened || 0).toLocaleDateString()}${d.url ? " · " + d.url : " · (opened from local file picker)"}`;
     main.append(t, m);
     const acts = document.createElement("div"); acts.className = "r-actions";
-    if (d.url) { const b = document.createElement("button"); b.textContent = "Open"; b.addEventListener("click", () => { location.href = `${location.pathname}?file=${d.url}`; }); acts.appendChild(b); }
+    if (d.url && isWeb) {
+      const b = document.createElement("button"); b.textContent = "Open + panel"; b.title = "Open in a new tab with the notes side panel";
+      b.addEventListener("click", () => openWithPanel(d.url)); acts.appendChild(b);
+      const b2 = document.createElement("button"); b2.textContent = "Split view";
+      b2.addEventListener("click", () => { location.href = `${location.pathname}?web=${d.url}`; }); acts.appendChild(b2);
+    } else if (d.url) { const b = document.createElement("button"); b.textContent = "Open"; b.addEventListener("click", () => { location.href = `${location.pathname}?file=${d.url}`; }); acts.appendChild(b); }
     const ex = document.createElement("button"); ex.textContent = "Export .md";
     ex.addEventListener("click", async () => { const notes = await db.getNotesForDoc(d.fp); downloadText(`${safeName(d.title || d.filename)}-notes.md`, notesToMarkdown(d, notes)); });
     const del = document.createElement("button"); del.textContent = "Delete notes"; del.className = "danger";
@@ -1091,8 +1149,11 @@ async function menuAction(act) {
       else toast("Download the PDF and print it from Chrome's viewer.");
       break;
     }
+    case "openTab": if (S.web?.url) chrome.runtime.sendMessage({ type: "openInTab", url: S.web.url }); break;
+    case "openPanel": if (S.web?.url) openWithPanel(S.web.url); break;
+    case "reloadWeb": if (S.web?.host === "frame") { const src = el.webFrame.src; el.webFrame.src = "about:blank"; setTimeout(() => { el.webFrame.src = src; }, 50); } break;
     case "exportInkPage": await saveInkNow(); await exportInk([S.notePage || S.currentPage]); break;
-    case "exportInkAll": { await saveInkNow(); const pages = [...new Set([...S.ink.keys()].map((k) => parseInt(k.split(":")[1], 10)))].sort((a, b) => a - b); await exportInk(pages); break; }
+    case "exportInkAll": { await saveInkNow(); const pages = [...new Set([...S.ink.keys()].map((k) => parseInt(k.split(":")[1], 10)))].sort((a, b) => a - b); if (S.mode === "web") { const n = pages.filter((pg) => S.ink.has(`note:${pg}`)); let c = 0; for (const pg of n) { downloadBlob(`${safeName(S.doc?.title || S.filename)}-${isVideo() ? fmtClock(pg).replace(/:/g, ".") : "s" + pg}-sketch.png`, await sketchPng(pg)); c++; await new Promise((r) => setTimeout(r, 250)); } toast(c ? `Exported ${c} PNG${c === 1 ? "" : "s"}` : "No handwriting to export"); break; } await exportInk(pages); break; }
     case "shortcuts": el.shortcuts.hidden = false; break;
     case "options": chrome.runtime.sendMessage({ type: "openOptions" }); break;
   }
@@ -1101,12 +1162,21 @@ async function menuAction(act) {
 // ---------- events ----------
 function wireEvents() {
   // toolbar
-  $("btnHome").addEventListener("click", async () => { await saveNow(); location.href = location.pathname; });
+  $("btnHome").addEventListener("click", async () => { await saveNow(); await saveInkNow(); location.href = location.pathname; });
+  el.btnPlay.addEventListener("click", () => agentSend({ type: "mn:toggle" }));
+  el.btnAnchor.addEventListener("click", anchorHere);
+  $("webHintTab").addEventListener("click", () => { if (S.web?.url) chrome.runtime.sendMessage({ type: "openInTab", url: S.web.url }); });
+  $("webHintPanel").addEventListener("click", () => { if (S.web?.url) openWithPanel(S.web.url); });
+  $("webHintClose").addEventListener("click", () => { el.webHint.hidden = true; });
+  el.webFrame.addEventListener("load", () => { if (S.web?.host === "frame" && !S.web.srcdoc) setTimeout(() => connectAgent(), 150); });
+  $("urlForm").addEventListener("submit", (e) => { e.preventDefault(); openTyped(el.urlInput.value, "auto"); });
+  $("btnSplitUrl").addEventListener("click", () => openTyped(el.urlInput.value, "split"));
+  $("panelEmptyRetry").addEventListener("click", () => panelFollowActiveTab(true));
   $("btnPrev").addEventListener("click", () => goToPage(S.currentPage - 1));
   $("btnNext").addEventListener("click", () => goToPage(S.currentPage + 1));
-  el.pageInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { const n = parseInt(el.pageInput.value, 10); if (n) goToPage(n); el.scroll.focus(); } if (e.key === "Escape") { el.pageInput.value = String(S.currentPage); el.scroll.focus(); } });
+  el.pageInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { const n = isVideo() ? parseClock(el.pageInput.value) : parseInt(el.pageInput.value, 10); if (n != null && !Number.isNaN(n)) goToPage(n); el.scroll.focus(); } if (e.key === "Escape") { el.pageInput.value = pageInputText(S.currentPage); el.scroll.focus(); } });
   el.pageInput.addEventListener("focus", () => el.pageInput.select());
-  el.pageInput.addEventListener("blur", () => { el.pageInput.value = String(S.currentPage); });
+  el.pageInput.addEventListener("blur", () => { el.pageInput.value = pageInputText(S.currentPage); });
   $("btnZoomIn").addEventListener("click", () => zoomBy(1.15));
   $("btnZoomOut").addEventListener("click", () => zoomBy(1 / 1.15));
   el.zoomSelect.addEventListener("change", () => { const v = el.zoomSelect.value; if (v === "width" || v === "page") setZoom(v); else if (v !== "custom") setZoom("custom", parseFloat(v)); el.scroll.focus(); });
@@ -1188,10 +1258,16 @@ function wireEvents() {
   el.noteText.addEventListener("keydown", onNoteKeydown);
   el.notePreview.addEventListener("click", (e) => {
     const a = e.target.closest("a[data-page]");
-    if (a) { e.preventDefault(); goToPage(parseInt(a.dataset.page, 10)); }
+    if (a) { e.preventDefault(); goToPage(parseInt(a.dataset.page, 10)); return; }
+    const t = e.target.closest("a[data-time]");
+    if (t) { e.preventDefault(); if (isVideo()) goToPage(parseInt(t.dataset.time, 10)); }
   });
   el.npPageBtn.addEventListener("click", togglePin);
-  el.npDocBtn.addEventListener("click", () => { if (S.notePage === 0) { setNotePage(S.currentPage); } else setNotePage(0); el.noteText.focus(); });
+  el.npDocBtn.addEventListener("click", () => {
+    if (S.notePage === 0) { if (isVideo()) { S.pinned = false; el.npPageBtn.classList.remove("pinned"); setNotePage(followTarget()); } else setNotePage(S.currentPage); }
+    else { if (isVideo()) { S.pinned = true; el.npPageBtn.classList.add("pinned"); } setNotePage(0); }
+    el.noteText.focus();
+  });
   $("btnPreview").addEventListener("click", () => togglePreview());
   $("btnPrevNoted").addEventListener("click", () => jumpNoted(-1));
   $("btnNextNoted").addEventListener("click", () => jumpNoted(1));
@@ -1213,8 +1289,11 @@ function wireEvents() {
   for (const evt of ["dragenter", "dragover"]) document.addEventListener(evt, (e) => { if ([...(e.dataTransfer?.types || [])].includes("Files")) { e.preventDefault(); el.dropZone.classList.add("over"); } });
   for (const evt of ["dragleave", "drop"]) document.addEventListener(evt, () => el.dropZone.classList.remove("over"));
   document.addEventListener("drop", (e) => {
-    const f = [...(e.dataTransfer?.files || [])].find((x) => /pdf$/i.test(x.type) || /\.pdf$/i.test(x.name));
-    if (f) { e.preventDefault(); openFile(f); }
+    const files = [...(e.dataTransfer?.files || [])];
+    const f = files.find((x) => /pdf$/i.test(x.type) || /\.pdf$/i.test(x.name)) || files.find(openableFile);
+    if (f) { e.preventDefault(); openFile(f); return; }
+    const uri = e.dataTransfer?.getData("text/uri-list") || e.dataTransfer?.getData("text/plain");
+    if (uri && DOCKABLE_RE.test(uri.trim())) { e.preventDefault(); openTyped(uri.trim(), "auto"); }
   });
 
   // global keys
@@ -1225,6 +1304,7 @@ function wireEvents() {
 }
 
 function toggleNotes() {
+  if (HOST === "panel") return;
   document.body.classList.toggle("notes-hidden");
   $("btnNotesToggle").classList.toggle("active", !document.body.classList.contains("notes-hidden"));
   scheduleLayout();
@@ -1237,9 +1317,9 @@ function togglePin() {
   toast(S.pinned ? `Pinned notes to ${noteLabel(S.notePage).toLowerCase()}` : "Notes follow scrolling");
 }
 async function openFile(file) {
-  const buf = await file.arrayBuffer();
   history.replaceState(null, "", location.pathname);
-  await openFromData(new Uint8Array(buf), file.name);
+  if (/pdf$/i.test(file.type) || /\.pdf$/i.test(file.name)) { const buf = await file.arrayBuffer(); await openFromData(new Uint8Array(buf), file.name); return; }
+  await openWebData(file);
 }
 
 function onNoteKeydown(e) {
@@ -1279,14 +1359,17 @@ function onNoteKeydown(e) {
 }
 
 function onGlobalKeydown(e) {
-  if (!S.pdf) return;
+  if (!S.pdf && S.mode !== "web") return;
   const inEdit = isEditable(e.target);
   const mod = e.ctrlKey || e.metaKey;
+  const web = S.mode === "web";
   // works everywhere
   if (e.altKey && !mod) {
-    if (e.key === "ArrowRight") { e.preventDefault(); goToPage(S.currentPage + 1); return; }
-    if (e.key === "ArrowLeft") { e.preventDefault(); goToPage(S.currentPage - 1); return; }
+    if (e.key === "ArrowRight") { e.preventDefault(); goToPage(isVideo() ? S.currentPage + (e.shiftKey ? 30 : 10) : S.currentPage + 1); return; }
+    if (e.key === "ArrowLeft") { e.preventDefault(); goToPage(isVideo() ? S.currentPage - (e.shiftKey ? 30 : 10) : S.currentPage - 1); return; }
+    if (e.key === "Enter" && isVideo()) { e.preventDefault(); anchorHere(); return; }
     const k = e.key.toLowerCase();
+    if (k === "k" && isVideo()) { e.preventDefault(); agentSend({ type: "mn:toggle" }); return; }
     if (k === "n") { e.preventDefault(); if (document.body.classList.contains("notes-hidden")) toggleNotes(); if (document.activeElement === el.noteText) { el.noteText.blur(); el.scroll.focus(); } else { switchTab("page"); el.noteText.focus(); } return; }
     if (k === "s") { e.preventDefault(); saveSetting({ side: settings.side === "left" ? "right" : "left" }); return; }
     if (k === "p") { e.preventDefault(); togglePin(); return; }
@@ -1297,8 +1380,8 @@ function onGlobalKeydown(e) {
     const surf = activeInkSurface();
     if (surf) { e.preventDefault(); if (e.shiftKey) surf.redo(); else surf.undo(); return; }
   }
-  if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); openFind(); return; }
-  if (mod && e.key.toLowerCase() === "q") { e.preventDefault(); quoteSelectionIntoNotes(); return; }
+  if (mod && e.key.toLowerCase() === "f") { if (web) return; e.preventDefault(); openFind(); return; }
+  if (mod && e.key.toLowerCase() === "q") { e.preventDefault(); if (!web) quoteSelectionIntoNotes(); return; }
   if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); zoomBy(1.15); return; }
   if (mod && e.key === "-") { e.preventDefault(); zoomBy(1 / 1.15); return; }
   if (mod && e.key === "0") { e.preventDefault(); setZoom("width"); return; }
@@ -1320,15 +1403,438 @@ function onGlobalKeydown(e) {
     case "+": case "=": e.preventDefault(); zoomBy(1.15); break;
     case "-": e.preventDefault(); zoomBy(1 / 1.15); break;
     case "0": e.preventDefault(); setZoom("width"); break;
-    case "r": e.preventDefault(); rotate(); break;
-    case "a": e.preventDefault(); setAnnotating(!S.annotating); break;
+    case "r": if (!web) { e.preventDefault(); rotate(); } break;
+    case "a": if (!web) { e.preventDefault(); setAnnotating(!S.annotating); } break;
     case "p": if (S.annotating || S.noteMode === "ink") { e.preventDefault(); setInkState({ tool: "pen" }); } break;
     case "h": if (S.annotating || S.noteMode === "ink") { e.preventDefault(); setInkState({ tool: "hl" }); } break;
     case "e": if (S.annotating || S.noteMode === "ink") { e.preventDefault(); setInkState({ tool: "eraser" }); } break;
-    case "/": e.preventDefault(); openFind(); break;
+    case "/": if (!web) { e.preventDefault(); openFind(); } break;
     case "?": e.preventDefault(); el.shortcuts.hidden = false; break;
     case "Home": if (e.target === el.scroll || e.target === document.body) { e.preventDefault(); goToPage(1); } break;
     case "End": if (e.target === el.scroll || e.target === document.body) { e.preventDefault(); goToPage(S.numPages); } break;
+    case " ": if (isVideo() && (e.target === document.body || e.target === el.scroll)) { e.preventDefault(); agentSend({ type: "mn:toggle" }); } break;
+  }
+}
+
+// ======================================================================
+// Web / video mode — notes on any web page, HTML/text/image file, or video.
+// Two hosts share this code:
+//   "frame": split view in a normal tab (?web=URL or a picked file). The page
+//            lives in #webFrame; a page agent is injected into it when possible.
+//   "panel": the side panel / sidebar (?panel=1). The page is the active tab; the
+//            agent is injected into its top frame. Works with any site (YouTube…).
+// Notes are keyed like PDF pages: page 0 = whole page/video, pages 1..N =
+// sections (1 = top, n = heading n-1) or, for videos, whole seconds of playback.
+// ======================================================================
+const SANDBOX_SITE = "allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation allow-storage-access-by-user-activation";
+const HINT_AFTER_MS = 7000;
+
+function isVideo() { return S.mode === "web" && S.web?.kind === "video"; }
+function fmtClock(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s2 = sec % 60;
+  return (h ? `${h}:${String(m).padStart(2, "0")}` : String(m)) + ":" + String(s2).padStart(2, "0");
+}
+function parseClock(str) {
+  const parts = String(str || "").trim().split(":").map((x) => parseInt(x, 10));
+  if (!parts.length || parts.some((x) => Number.isNaN(x))) return null;
+  return parts.reduce((acc, v) => acc * 60 + v, 0);
+}
+// Canonical key for a page so notes survive tracking params, hashes and YouTube's URL variants.
+function normalizeWebUrl(raw) {
+  try {
+    const u = new URL(raw);
+    u.hash = "";
+    const host = u.hostname.replace(/^(www|m)\./, "");
+    if (/(^|\.)youtube\.com$/.test(host) || host === "youtu.be" || host === "youtube-nocookie.com") {
+      let id = null;
+      if (host === "youtu.be") id = u.pathname.slice(1).split("/")[0];
+      else if (/^\/(embed|shorts|live|v)\//.test(u.pathname)) id = u.pathname.split("/")[2];
+      else id = u.searchParams.get("v");
+      if (id) return `https://www.youtube.com/watch?v=${id}`;
+    }
+    if (host === "player.vimeo.com") { const id = u.pathname.split("/").filter(Boolean).pop(); if (id) return `https://vimeo.com/${id}`; }
+    for (const k of [...u.searchParams.keys()]) if (/^(utm_|fbclid|gclid|mc_|ref$|source$|si$)/.test(k)) u.searchParams.delete(k);
+    if (u.searchParams.has("t") && !u.searchParams.has("v")) u.searchParams.delete("t");
+    let out = u.toString();
+    if (out.endsWith("?")) out = out.slice(0, -1);
+    return out;
+  } catch { return raw; }
+}
+// Split view: sites that refuse to be framed but offer an embeddable player.
+function embedUrlFor(raw) {
+  try {
+    const u = new URL(raw);
+    const host = u.hostname.replace(/^(www|m)\./, "");
+    if (/(^|\.)youtube\.com$/.test(host) || host === "youtu.be") {
+      const key = normalizeWebUrl(raw);
+      const id = new URL(key).searchParams.get("v");
+      const t = u.searchParams.get("t") || (u.hash.match(/t=(\d+)/) || [])[1];
+      if (id) return `https://www.youtube-nocookie.com/embed/${id}?autoplay=0&rel=0${t ? `&start=${parseInt(t, 10) || 0}` : ""}`;
+    }
+    if (host === "vimeo.com") { const id = u.pathname.split("/").filter(Boolean).pop(); if (/^\d+$/.test(id || "")) return `https://player.vimeo.com/video/${id}`; }
+  } catch { /* ignore */ }
+  return raw;
+}
+function agentSend(msg) {
+  const w = S.web;
+  if (!w || w.tabId == null || w.srcdoc) return Promise.resolve(null);
+  try {
+    const opts = w.host === "panel" ? { frameId: 0 } : {};
+    const p = chrome.tabs.sendMessage(w.tabId, msg, opts);
+    return p && p.catch ? p.catch(() => null) : Promise.resolve(p);
+  } catch { return Promise.resolve(null); }
+}
+// Where notes should sit for the current playback time: latest anchored second ≤ now (or the one being started).
+function followTarget() {
+  const t = S.currentPage;
+  let best = 0;
+  for (const pg of contentPages()) if (pg > 0 && pg <= t && pg > best) best = pg;
+  const pa = S.web?.pendingAnchor;
+  if (pa != null && pa <= t && pa > best) best = pa;
+  return best;
+}
+function anchorHere() {
+  if (!isVideo()) return;
+  const t = Math.max(1, Math.floor(S.currentPage)); // second 0 is reserved for the whole-video note
+  S.web.pendingAnchor = t;
+  if (S.pinned) { S.pinned = false; el.npPageBtn.classList.remove("pinned"); }
+  if (document.body.classList.contains("notes-hidden")) toggleNotes();
+  switchTab("page");
+  setNotePage(t, { force: true }).then(() => { if (S.noteMode !== "ink") { if (el.noteText.hidden) togglePreview(false); el.noteText.focus(); } });
+  toast(`Note at ${fmtClock(t)}`);
+}
+function webGoTo(n) {
+  if (!S.web) return;
+  if (isVideo()) {
+    n = clamp(Math.round(n), 0, S.numPages || Math.max(0, Math.round(n)));
+    agentSend({ type: "mn:seek", t: n });
+    S.currentPage = n; onCurrentPageChanged();
+    return;
+  }
+  n = clamp(Math.round(n), 1, S.numPages || 1);
+  agentSend({ type: "mn:goto", index: n - 1 });
+  S.currentPage = n; onCurrentPageChanged();
+}
+
+// ---- agent plumbing ----
+async function connectAgent(retry = true) {
+  const w = S.web;
+  if (!w || w.tabId == null || w.srcdoc) return false;
+  const token = w.token;
+  const r = await agentSend({ type: "mn:ping" });
+  if (S.web !== w || w.token !== token) return false;
+  if (r?.ok) { onAgentInit(r); return true; }
+  if (retry) {
+    const args = w.host === "panel" ? { type: "injectAgent", tabId: w.tabId, frameId: 0 } : { type: "injectAgent" };
+    try { await chrome.runtime.sendMessage(args); } catch { /* ignore */ }
+    await new Promise((res) => setTimeout(res, 250));
+    return connectAgent(false);
+  }
+  return false;
+}
+function onAgentMessage(msg, sender) {
+  if (!msg?.mnAgent || !S.web || S.mode !== "web") return;
+  const w = S.web;
+  if (sender.tab?.id !== w.tabId) return;
+  if (w.host === "panel" ? sender.frameId !== 0 : sender.frameId === 0) return;
+  switch (msg.type) {
+    case "mn:init": onAgentInit(msg); break;
+    case "mn:headings": applyHeadings(msg.headings || []); break;
+    case "mn:section": if (!isVideo()) { const n = (msg.index || 0) + 1; if (n !== S.currentPage) { S.currentPage = n; onCurrentPageChanged(); } } break;
+    case "mn:media": applyMedia(msg.media); break;
+    case "mn:quote": onAgentQuote(msg); break;
+    case "mn:key": document.dispatchEvent(new KeyboardEvent("keydown", { key: msg.key, altKey: !!msg.alt, shiftKey: !!msg.shift, bubbles: true, cancelable: true })); break;
+    case "mn:bye": w.connected = false; break;
+  }
+}
+async function onAgentInit(snap) {
+  const w = S.web; if (!w) return;
+  w.connected = true; el.webHint.hidden = true; clearTimeout(w.hintTimer);
+  if (snap.url && normalizeWebUrl(snap.url) !== w.key) await attachWebDoc(snap.url, { title: snap.title });
+  else if (snap.title && snap.title !== w.title) { w.title = snap.title; setWebTitle(snap.title); updateDoc({ title: snap.title }); }
+  agentSend({ type: "mn:quoteEnabled", on: settings.autoQuote !== false });
+  if (w.zoom && w.zoom !== 1) agentSend({ type: "mn:zoom", z: w.zoom });
+  applyHeadings(snap.headings || []);
+  if (snap.media && snap.media.duration > 0) applyMedia(snap.media);
+  else if (!isVideo() && typeof snap.section === "number") { S.currentPage = snap.section + 1; onCurrentPageChanged(); }
+}
+function setWebTitle(title) {
+  const t = title || S.web?.url || "Page";
+  el.docTitle.textContent = t; el.docTitle.title = S.web?.url || t;
+  document.title = HOST === "panel" ? `Notes — ${t}` : t;
+}
+function applyHeadings(headings) {
+  const w = S.web; if (!w) return;
+  const sig = JSON.stringify(headings);
+  if (w.headingsSig === sig) return;
+  w.headingsSig = sig;
+  w.headings = headings;
+  if (!isVideo()) {
+    S.numPages = Math.max(1, headings.length + 1);
+    el.pageCount.textContent = String(S.numPages);
+    el.pageKind.textContent = "§";
+    S.currentPage = clamp(S.currentPage || 1, 1, S.numPages);
+    el.pageInput.value = pageInputText(S.currentPage);
+    renderNoteStrip();
+    el.npPageLabel.textContent = noteLabel(S.notePage);
+  }
+  updateDoc({ sections: headings.slice(0, 400).map((h) => h.text), pageCount: headings.length + 1 });
+  renderWebOutline();
+}
+function applyMedia(media) {
+  const w = S.web; if (!w) return;
+  if (!media || !(media.duration > 0)) { if (media === null && w.kind === "video" && w.mediaSeen) { /* video removed (SPA nav) — keep kind until next init */ } return; }
+  w.mediaSeen = true;
+  const dur = Math.ceil(media.duration);
+  if (w.kind !== "video") {
+    w.kind = "video"; document.body.dataset.kind = "video";
+    el.pageKind.textContent = "⏱";
+    updateDoc({ kind: "video", duration: dur });
+    S.pinned = false; el.npPageBtn.classList.remove("pinned");
+    renderWebOutline();
+  }
+  if (S.numPages !== dur) { S.numPages = dur; el.pageCount.textContent = fmtClock(dur); renderNoteStrip(); if (w.duration !== dur) updateDoc({ duration: dur }); w.duration = dur; }
+  el.btnPlay.classList.toggle("playing", !media.paused);
+  el.btnPlay.title = media.paused ? "Play (Alt+K)" : "Pause (Alt+K)";
+  const t = Math.floor(media.t || 0);
+  if (t !== S.currentPage) { S.currentPage = t; onCurrentPageChanged(); }
+  else el.pageInput.value = pageInputText(t);
+}
+function onAgentQuote(msg) {
+  const text = (msg.text || "").trim(); if (!text) return;
+  if (isVideo()) {
+    const t = Math.max(1, Math.floor(msg.media?.t ?? S.currentPage));
+    let page = S.notePage;
+    if (page === 0 || !(pageHasContent(page) || page === S.web.pendingAnchor) || Math.abs(page - t) > 90) { page = followTarget() || t; if (!page || t - page > 90) page = t; }
+    if (!pageHasContent(page)) S.web.pendingAnchor = page;
+    insertQuote(text, page, ` (${fmtClock(t)})`);
+  } else {
+    const page = typeof msg.section === "number" ? msg.section + 1 : S.currentPage;
+    insertQuote(text, page, ` (§${Math.max(0, page - 1)})`);
+  }
+}
+function renderWebOutline() {
+  const w = S.web; if (!w) return;
+  if (isVideo() || !w.headings.length) { el.outline.replaceChildren(emptyEl(isVideo() ? "Notes on videos are anchored to timestamps — see All notes." : "No headings found on this page.")); S.outlineItems = []; return; }
+  const root = document.createElement("ul");
+  S.outlineItems = []; S.outlinePages = [];
+  w.headings.forEach((h, i) => {
+    const li = document.createElement("li");
+    const row = document.createElement("div"); row.className = "ol-row";
+    row.style.paddingLeft = `${Math.max(0, Math.min(4, h.level - 1)) * 12}px`;
+    const btn = document.createElement("button"); btn.className = "ol-link"; btn.textContent = h.text;
+    btn.addEventListener("click", () => goToPage(i + 2));
+    S.outlineItems.push({ item: h, btn }); S.outlinePages.push(i + 2);
+    row.appendChild(btn); li.appendChild(row); root.appendChild(li);
+  });
+  el.outline.replaceChildren(root);
+  updateOutlineCurrent();
+}
+
+// ---- doc lifecycle ----
+function openWebCommon(host) {
+  setMode("web");
+  document.body.dataset.host = host;
+  document.body.dataset.kind = "doc";
+  S.web = { host, url: null, key: null, tabId: null, kind: "doc", title: null, headings: [], duration: 0, connected: false, hintTimer: null, srcdoc: false, zoom: 1, pendingAnchor: null, token: Math.random(), mediaSeen: false };
+  S.pinned = false; el.npPageBtn.classList.remove("pinned");
+  el.zoomSelect.value = "width";
+  el.webHint.hidden = true;
+}
+function attachWebDoc(url, opts = {}) {
+  const w = S.web; if (!w) return Promise.resolve();
+  w.attachChain = (w.attachChain || Promise.resolve()).then(() => (S.web === w ? attachWebDocNow(url, opts) : null)).catch((e) => console.error("attach", e));
+  return w.attachChain;
+}
+async function attachWebDocNow(url, { title = null, fp = null, kindHint = null } = {}) {
+  const w = S.web; if (!w) return;
+  if (w.key && !fp && normalizeWebUrl(url) === w.key) { if (title && title !== w.title) { w.title = title; setWebTitle(title); } return; }
+  await saveNow(); await saveInkNow();
+  w.url = url; w.key = normalizeWebUrl(url);
+  S.url = url;
+  let host = ""; try { host = new URL(url).hostname.replace(/^www\./, ""); } catch { /* ignore */ }
+  w.title = title || host || url;
+  S.filename = w.title;
+  S.fp = fp || `web:${w.key}`;
+  const prev = await db.getDoc(S.fp);
+  const kind = kindHint || (prev?.kind === "video" ? "video" : "web");
+  w.kind = kind === "video" ? "video" : "doc";
+  document.body.dataset.kind = w.kind;
+  el.pageKind.textContent = w.kind === "video" ? "⏱" : "§";
+  S.doc = await db.touchDoc(S.fp, { kind, title: w.title, filename: w.title, url: fp ? null : url, pageCount: prev?.pageCount || 1, duration: prev?.duration || 0 });
+  const notes = await db.getNotesForDoc(S.fp);
+  S.notedPages = new Set(notes.map((n) => n.page));
+  S.noteCache = new Map(notes.map((n) => [n.page, n.text]));
+  S.ink = new Map();
+  for (const rec of await db.getInkForDoc(S.fp)) if (rec.strokes?.length) S.ink.set(`${rec.target}:${rec.page}`, rec.strokes);
+  S.inkDirty.clear();
+  S.sketchSurface?.resetHistory();
+  w.headings = []; w.headingsSig = null; w.pendingAnchor = null; w.duration = prev?.duration || 0;
+  S.numPages = w.kind === "video" ? (prev?.duration || 0) : 1;
+  S.currentPage = w.kind === "video" ? 0 : 1;
+  el.pageCount.textContent = w.kind === "video" ? (prev?.duration ? fmtClock(prev.duration) : "–") : "1";
+  el.pageInput.value = pageInputText(S.currentPage);
+  setWebTitle(w.title);
+  el.noteText.placeholder = w.kind === "video"
+    ? "Notes for this moment… “＋ note here” (Alt+Enter) anchors a note at the current time; type 12:34 to make a jump link. Markdown ok."
+    : "Notes for this section… (Markdown ok: **bold**, - lists, > quotes, - [ ] tasks)";
+  updateAllCount();
+  renderNoteStrip();
+  S.noteLoadedFor = null;
+  await setNotePage(w.kind === "video" ? 0 : 1, { force: true });
+  setNoteMode(settings.noteMode || "text", { persist: false });
+  renderWebOutline();
+  if (document.querySelector('.tab-panel[data-panel="all"]').classList.contains("active")) renderAllList();
+  if (HOST !== "panel") history.replaceState(null, "", `${location.pathname}?web=${url}`);
+}
+async function teardownWeb() {
+  if (!S.web) return;
+  await saveNow(); await saveInkNow();
+  clearTimeout(S.web.hintTimer);
+  if (S.web.host === "frame") { el.webFrame.removeAttribute("srcdoc"); el.webFrame.src = "about:blank"; }
+  S.web = null;
+  S.ink = new Map(); S.inkDirty.clear();
+  S.notedPages = new Set(); S.noteCache = new Map();
+  S.fp = null; S.doc = null; S.url = null;
+  el.webHint.hidden = true;
+}
+function showWebHint(kind) {
+  const w = S.web; if (!w) return;
+  $("webHintTitle").textContent = kind === "file" ? "Can't show this local file" : "This site doesn't allow embedding";
+  $("webHintText").textContent = kind === "file"
+    ? "Chrome needs “Allow access to file URLs” for this extension (Settings → Local files), or drop the file onto the Margin Notes library page instead."
+    : "The page refused to load inside Margin Notes (X-Frame-Options / CSP). Open it in a normal tab and take notes from the side panel — that works with every site, including video platforms.";
+  $("webHintPanel").hidden = kind === "file";
+  el.webHint.hidden = false;
+}
+// Split view in a normal tab.
+async function openWeb(url) {
+  if (!DOCKABLE_RE.test(url)) { showLanding(); el.loadError.textContent = `Only http(s):// and file:// links can be opened in Margin Notes.\n${url}`; el.loadError.hidden = false; return; }
+  await teardown(); await teardownWeb();
+  openWebCommon("frame");
+  showViewer();
+  const w = S.web;
+  try { w.tabId = (await chrome.tabs.getCurrent())?.id ?? null; } catch { /* ignore */ }
+  // A link without .pdf that serves a PDF → hand over to the PDF viewer.
+  if (/^https?:/i.test(url)) {
+    try {
+      const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 3000);
+      const r = await fetch(url, { method: "HEAD", credentials: "include", redirect: "follow", signal: ctl.signal });
+      clearTimeout(tm);
+      if (/application\/(x-)?pdf/i.test(r.headers.get("content-type") || "")) { await teardownWeb(); history.replaceState(null, "", `${location.pathname}?file=${url}`); return openFromUrl(url); }
+    } catch { /* ignore: not every server likes HEAD */ }
+  }
+  await attachWebDoc(url);
+  el.webFrame.removeAttribute("srcdoc");
+  el.webFrame.setAttribute("sandbox", SANDBOX_SITE);
+  el.webFrame.src = embedUrlFor(url);
+  w.hintTimer = setTimeout(async () => {
+    if (S.web !== w || w.connected) return;
+    if (/^file:/i.test(url)) { const { allowed } = await chrome.runtime.sendMessage({ type: "getFileAccess" }).catch(() => ({ allowed: true })); if (!allowed) return showWebHint("file"); }
+    showWebHint("site");
+  }, HINT_AFTER_MS);
+}
+// A picked / dropped non-PDF file: rendered into a fully sandboxed frame (opaque origin, no scripts).
+function openableFile(f) { return /^(text\/html|text\/plain|text\/markdown|image\/)/i.test(f.type) || /\.(html?|txt|md|markdown|png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(f.name); }
+async function openWebData(file) {
+  if (!openableFile(file)) { toast(`Can't open ${file.name} — PDF, HTML, Markdown, text or image only`); return; }
+  await teardown(); await teardownWeb();
+  openWebCommon("frame");
+  showViewer();
+  const w = S.web; w.srcdoc = true;
+  const buf = await file.arrayBuffer();
+  const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", buf))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const isImg = /^image\//i.test(file.type) || /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(file.name);
+  const isMd = /markdown/i.test(file.type) || /\.(md|markdown)$/i.test(file.name);
+  const isHtml = /html/i.test(file.type) || /\.html?$/i.test(file.name);
+  const css = "body{margin:0;padding:24px 32px;font:16px/1.55 system-ui,sans-serif;color:#1f1e1b;background:#fff;max-width:820px}pre{white-space:pre-wrap;font:14px/1.5 ui-monospace,monospace}img{max-width:100%;height:auto;display:block;margin:0 auto}h1,h2,h3{line-height:1.25}blockquote{border-left:3px solid #ccc;margin:0;padding:0 12px;color:#555}code{font-family:ui-monospace,monospace;background:#f3f1ea;padding:0 4px;border-radius:3px}";
+  let html;
+  if (isImg) {
+    const dataUrl = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(file); });
+    html = `<!doctype html><meta charset="utf-8"><style>${css}body{padding:16px;background:#2a2a2a}</style><img alt="" src="${dataUrl}">`;
+  } else {
+    const text = new TextDecoder().decode(buf);
+    if (isHtml) html = text;
+    else if (isMd) html = `<!doctype html><meta charset="utf-8"><style>${css}</style><article class="md">${renderMarkdown(text)}</article>`;
+    else html = `<!doctype html><meta charset="utf-8"><style>${css}</style><pre>${text.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]))}</pre>`;
+  }
+  await attachWebDoc(`file:${file.name}`, { title: file.name, fp: `web:sha256:${hash}` });
+  history.replaceState(null, "", location.pathname);
+  el.webFrame.src = "about:blank";
+  el.webFrame.setAttribute("sandbox", ""); // opaque origin, no scripts, no navigation, no popups
+  el.webFrame.srcdoc = html;
+}
+// Open URL in a new tab and pop the notes side panel next to it. Must run in a click handler.
+async function openWithPanel(url) {
+  const raw = (url || "").trim(); if (!DOCKABLE_RE.test(raw)) return;
+  let win = null;
+  try { win = await chrome.windows.getCurrent(); } catch { /* ignore */ }
+  let opened = false;
+  try {
+    if (chrome.sidePanel && win) { await chrome.sidePanel.open({ windowId: win.id }); opened = true; }
+    else if (chrome.sidebarAction) { await chrome.sidebarAction.open(); opened = true; }
+  } catch (e) { console.warn("side panel", e); }
+  const tab = await chrome.tabs.create({ url: raw, active: true });
+  if (opened && tab?.id != null) setTimeout(() => chrome.runtime.sendMessage({ type: "injectAgent", tabId: tab.id, frameId: 0 }).catch?.(() => {}), 800);
+  if (!opened) toast("Side panel not available here — opened in a new tab");
+}
+function openTyped(raw, how) {
+  let u = (raw || "").trim();
+  if (!u) { el.urlInput.focus(); return; }
+  if (/^\//.test(u)) u = "file://" + u;
+  else if (!/^[a-z][a-z0-9+.-]*:/i.test(u)) u = "https://" + u;
+  if (!DOCKABLE_RE.test(u)) { el.loadError.textContent = "Only http(s):// and file:// links can be opened."; el.loadError.hidden = false; return; }
+  const isPdf = /^(https?|file):\/\/[^?#]+\.pdf([?#].*)?$/i.test(u);
+  if (isPdf) { location.href = `${location.pathname}?file=${u}`; return; }
+  if (how === "split" || /^file:/i.test(u) || !S.panelSupported) { location.href = `${location.pathname}?web=${u}`; return; }
+  openWithPanel(u);
+}
+async function checkPanelSupport() {
+  S.panelSupported = !!(chrome.sidePanel || chrome.sidebarAction);
+  $("urlHint").hidden = !S.panelSupported;
+  if (!S.panelSupported) $("btnSplitUrl").hidden = true;
+}
+
+// ---- panel host: follow the active tab ----
+async function panelBoot() {
+  document.body.dataset.host = "panel";
+  el.landing.hidden = true;
+  chrome.tabs.onActivated.addListener(() => panelFollowActiveTab());
+  chrome.tabs.onUpdated.addListener((tabId, info) => {
+    if (!S.web || tabId !== S.web.tabId) return;
+    if (info.status === "complete" || info.url) setTimeout(() => connectAgent(), 200);
+    if (info.title && S.web && !S.web.connected) { S.web.title = info.title; setWebTitle(info.title); }
+  });
+  chrome.windows?.onFocusChanged?.addListener(() => panelFollowActiveTab());
+  await panelFollowActiveTab(true);
+}
+function showPanelEmpty(why) {
+  el.toolbar.hidden = true; el.split.hidden = true; el.panelEmpty.hidden = false;
+  $("panelEmptyWhy").textContent = why || "";
+  document.title = "Margin Notes";
+}
+async function panelFollowActiveTab(force = false) {
+  let tab = null;
+  try { tab = PANEL_TAB ? await chrome.tabs.get(PANEL_TAB) : (await chrome.tabs.query({ active: true, currentWindow: true }))[0]; } catch { /* ignore */ }
+  if (!tab) { showPanelEmpty("No active tab."); return; }
+  if (S.web && S.web.tabId === tab.id && !force) { connectAgent(); return; }
+  const url = tab.url || tab.pendingUrl || "";
+  if (!DOCKABLE_RE.test(url)) {
+    await teardownWeb();
+    if (url.startsWith(chrome.runtime.getURL(""))) showPanelEmpty(url.includes("?file=") ? "This tab is a PDF in Margin Notes — its notes are already beside it." : "");
+    else showPanelEmpty(url ? "Browser pages can't be annotated." : "");
+    return;
+  }
+  await teardownWeb();
+  openWebCommon("panel");
+  showViewer();
+  S.web.tabId = tab.id;
+  await attachWebDoc(url, { title: tab.title });
+  const ok = await connectAgent();
+  if (!ok) {
+    const { granted } = await chrome.runtime.sendMessage({ type: "getHostAccess" }).catch(() => ({ granted: true }));
+    if (!granted) toast("Section / video tracking needs website access — open the Margin Notes library page and click “Allow access to websites”.", 7000);
   }
 }
 
@@ -1339,7 +1845,11 @@ function onGlobalKeydown(e) {
   setupSketch();
   setupPageInkBar();
   $("btnNotesToggle").classList.add("active");
+  chrome.runtime.onMessage.addListener(onAgentMessage);
+  if (HOST === "panel") { await panelBoot(); return; }
   const url = parseFileParam();
+  const web = parseWebParam();
   if (url) await openFromUrl(url);
-  else showLanding();
+  else if (web) await openWeb(web);
+  else { showLanding(); checkPanelSupport(); }
 })();

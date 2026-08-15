@@ -25,7 +25,9 @@ function inline(s) {
     })
     .replace(/(^|\s)(https?:\/\/[^\s<]+[^\s<.,;:!?)\]])/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>')
     // "p.12" / "page 12" jump links
-    .replace(/(^|[\s(])((?:p\.|page )(\d{1,4}))\b/gi, (m, pre, whole, num) => `${pre}<a href="#" data-page="${num}" class="pref">${whole}</a>`);
+    .replace(/(^|[\s(])((?:p\.|page )(\d{1,4}))\b/gi, (m, pre, whole, num) => `${pre}<a href="#" data-page="${num}" class="pref">${whole}</a>`)
+    // "12:34" / "1:02:03" timestamps → seek links (video notes)
+    .replace(/(^|[\s(\[])((?:\d{1,2}:)?\d{1,2}:\d{2})(?=$|[\s).,;:!?\]])/g, (m, pre, ts) => { const parts = ts.split(":").map(Number); const sec = parts.reduce((a, v) => a * 60 + v, 0); return `${pre}<a href="#" data-time="${sec}" class="tref">${ts}</a>`; });
   return s.replace(new RegExp(`${PH_OPEN}(\\d+)${PH_CLOSE}`, "g"), (_, i) => codes[i]);
 }
 
