@@ -1,0 +1,32 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Margin Notes</title>
+<style>
+  body { font-family: system-ui, sans-serif; font-size: 13px; width: 260px; margin: 0; padding: 12px; color: #1f1e1b; background: #fbfaf6; }
+  @media (prefers-color-scheme: dark) { body { color: #e8e6e1; background: #1e1e22; } .row { border-color: #2f2f36 !important; } button { background: #26262b !important; color: #e8e6e1 !important; border-color: #43434c !important; } }
+  h1 { font-size: 14px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+  h1 img { width: 20px; height: 20px; }
+  .row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-top: 1px solid #e2dfd6; }
+  .row:first-of-type { border-top: 0; }
+  label.sw { position: relative; display: inline-block; width: 36px; height: 20px; }
+  label.sw input { opacity: 0; width: 0; height: 0; }
+  label.sw i { position: absolute; inset: 0; background: #b9b5aa; border-radius: 10px; transition: .15s; }
+  label.sw i::before { content: ""; position: absolute; width: 16px; height: 16px; left: 2px; top: 2px; background: #fff; border-radius: 50%; transition: .15s; }
+  label.sw input:checked + i { background: #b4530a; }
+  label.sw input:checked + i::before { transform: translateX(16px); }
+  .seg { display: inline-flex; border: 1px solid #b9b5aa; border-radius: 6px; overflow: hidden; }
+  .seg button { border: 0; background: transparent; padding: 3px 10px; cursor: pointer; font: inherit; color: inherit; }
+  .seg button.on { background: #b4530a; color: #fff !important; }
+  button.wide { width: 100%; margin-top: 8px; padding: 7px; border: 1px solid #b9b5aa; border-radius: 6px; background: #fff; cursor: pointer; font: inherit; }
+  button.wide:hover { border-color: #b4530a; }
+  .muted { color: #6b675e; font-size: 12px; margin-top: 8px; }
+</style></head>
+<body>
+<h1><img src="../icons/icon32.png" alt="">Margin Notes for PDF</h1>
+<div class="row"><span>Open PDFs in Margin Notes</span><label class="sw"><input type="checkbox" id="enabled"><i></i></label></div>
+<div class="row"><span>PDF side</span><span class="seg"><button data-side="left" id="sideLeft">Left</button><button data-side="right" id="sideRight">Right</button></span></div>
+<button class="wide" id="openLibrary">Open library / pick a PDF</button>
+<button class="wide" id="openThis" hidden>Open this tab's PDF in Margin Notes</button>
+<button class="wide" id="options">Settings</button>
+<div class="muted">Shortcut: <b>Alt+Shift+M</b> opens this popup.</div>
+<script src="popup.js"></script>
+</body></html>

@@ -1,0 +1,56 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Margin Notes — Settings</title>
+<link rel="stylesheet" href="../viewer/viewer.css">
+<style>
+  body { overflow: auto; display: block; }
+  .wrap { max-width: 640px; margin: 40px auto; padding: 0 20px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--fg-muted); margin: 0 0 24px; }
+  fieldset { border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; margin: 0 0 16px; background: var(--bg-notes); }
+  legend { font-weight: 600; padding: 0 6px; }
+  .opt { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 0; border-top: 1px solid var(--line); }
+  .opt:first-of-type { border-top: 0; }
+  .opt label { flex: 1 1 auto; }
+  .opt small { display: block; color: var(--fg-muted); }
+  select, input[type=number] { height: 30px; border: 1px solid var(--line); border-radius: 6px; padding: 0 8px; background: var(--bg-elev); color: var(--fg); font: inherit; }
+  input[type=range] { width: 180px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn { padding: 7px 14px; }
+  .btn.danger { color: var(--danger); }
+  #status { color: var(--fg-muted); font-size: 12px; margin-top: 8px; min-height: 1.2em; }
+</style></head>
+<body>
+<div class="wrap">
+  <h1>Margin Notes for PDF</h1>
+  <p class="sub">Settings sync across your Chrome profile. Notes themselves stay on this device (IndexedDB) — back them up below.</p>
+
+  <fieldset><legend>Opening PDFs</legend>
+    <div class="opt"><label>Open PDFs in Margin Notes<small>When off, Chrome's built-in viewer is used. You can still right-click a link → “Open link in Margin Notes”.</small></label><input type="checkbox" id="enabled"></div>
+    <div class="opt"><label>Local files<small>Chrome needs “Allow access to file URLs” for <code>file://</code> PDFs.</small></label><button class="btn" id="fileAccess">Check…</button></div>
+  </fieldset>
+
+  <fieldset><legend>Layout</legend>
+    <div class="opt"><label>PDF side</label><select id="side"><option value="left">Left (notes on the right)</option><option value="right">Right (notes on the left)</option></select></div>
+    <div class="opt"><label>PDF width<small><span id="splitVal"></span> of the window</small></label><input type="range" id="splitRatio" min="25" max="85" step="1"></div>
+    <div class="opt"><label>Default zoom</label><select id="defaultZoom"><option value="width">Fit width</option><option value="page">Fit page</option></select></div>
+    <div class="opt"><label>Theme</label><select id="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
+  </fieldset>
+
+  <fieldset><legend>Notes</legend>
+    <div class="opt"><label>Note font</label><select id="fontFamily"><option value="serif">Serif</option><option value="sans">Sans-serif</option><option value="mono">Monospace</option></select></div>
+    <div class="opt"><label>Note font size</label><input type="number" id="fontSize" min="11" max="24" step="1"> </div>
+    <div class="opt"><label>“Add to notes” bubble on text selection</label><input type="checkbox" id="autoQuote"></div>
+  </fieldset>
+
+  <fieldset><legend>Backup</legend>
+    <div class="actions">
+      <button class="btn" id="exportAll">Export all notes (JSON)</button>
+      <button class="btn" id="exportMd">Export all notes (Markdown)</button>
+      <label class="btn" style="cursor:pointer">Import JSON… <input type="file" id="importFile" accept="application/json,.json" hidden></label>
+      <button class="btn danger" id="wipe">Delete all notes</button>
+    </div>
+    <div id="status"></div>
+  </fieldset>
+</div>
+<script type="module" src="options.js"></script>
+</body></html>

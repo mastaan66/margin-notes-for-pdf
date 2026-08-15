@@ -1,0 +1,21 @@
+{
+  "name": "margin-notes-for-pdf",
+  "version": "1.0.0",
+  "description": "Chrome extension: PDF docked left/right with per-page notes in the free space",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test/e2e.mjs",
+    "test:intercept": "node test/e2e-intercept.mjs",
+    "pack": "mkdir -p dist && cd ext && zip -qr ../dist/margin-notes-$(node -p \"require('./manifest.json').version\").zip . -x \"*.map\" && ls -la ../dist"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "pdfjs-dist": "^6.2.108"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^25.7.0"
+  },
+  "private": true
+}
