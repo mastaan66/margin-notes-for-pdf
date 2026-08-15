@@ -2,7 +2,7 @@
 import * as pdfjsLib from "../lib/pdf.mjs";
 import { db, notesToMarkdown } from "./db.js";
 import { renderMarkdown } from "./markdown.js";
-import { InkSurface, buildInkToolbar, inkState, setInkState, onInkStateChange, drawStrokes, strokesToPng } from "./ink.js";
+import { InkSurface, buildInkToolbar, inkState, setInkState, onInkStateChange, drawStrokes, strokesToPng, hideInkCursor } from "./ink.js";
 
 const LIB = chrome.runtime.getURL("lib/");
 pdfjsLib.GlobalWorkerOptions.workerSrc = LIB + "pdf.worker.mjs";
@@ -783,6 +783,7 @@ function setNoteMode(mode, { persist = true } = {}) {
   el.noteEditor.hidden = ink; el.sketch.hidden = !ink;
   el.btnModeText.classList.toggle("active", !ink); el.btnModeInk.classList.toggle("active", ink);
   $("btnPreview").hidden = ink;
+  if (!ink) hideInkCursor();
   if (ink) { S.sketchSurface?.resetHistory(); requestAnimationFrame(refreshSketch); }
   if (persist) saveSetting({ noteMode: mode });
 }
@@ -815,6 +816,7 @@ function setAnnotating(on) {
   document.body.classList.toggle("annotating", S.annotating);
   $("btnAnnotate").classList.toggle("active", S.annotating);
   el.pageInkBar.hidden = !S.annotating;
+  if (!S.annotating) hideInkCursor();
   if (S.annotating) { el.selBubble.hidden = true; window.getSelection()?.removeAllRanges(); el.scroll.focus(); }
 }
 function setupPageInkBar() {

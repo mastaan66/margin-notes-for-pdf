@@ -150,6 +150,10 @@ try {
   check(await page.$eval("#sketch", (e) => !e.hidden), "Draw mode shows sketch pad");
   const sc = await page.$("#sketchCanvas");
   const sb = await sc.boundingBox();
+  await page.mouse.move(sb.x + 30, sb.y + 30);
+  await new Promise((r) => setTimeout(r, 100));
+  const curA = await page.$eval(".ink-cursor", (c) => ({ hidden: c.hidden, w: c.offsetWidth, left: c.style.left, tool: c.dataset.tool })).catch(() => null);
+  check(curA && !curA.hidden && curA.w >= 6 && curA.tool === "pen", `software pen cursor follows pointer over sketch (${JSON.stringify(curA)})`);
   await page.mouse.move(sb.x + 40, sb.y + 40); await page.mouse.down();
   for (let i = 1; i <= 20; i++) await page.mouse.move(sb.x + 40 + i * 8, sb.y + 40 + Math.sin(i / 3) * 20, { steps: 2 });
   await page.mouse.up();
@@ -189,8 +193,13 @@ try {
   const inkPx = await page.$eval('.page[data-page="1"] .inkLayer', (c) => { const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++; return n; });
   check(inkPx > 500, `page ink re-rendered after zoom (${inkPx} px)`);
   await page.select("#zoomSelect", "width");
+  await page.mouse.move(lb.x + 150, lb.y + 150);
+  await new Promise((r) => setTimeout(r, 100));
+  const cur2 = await page.$eval(".ink-cursor", (c) => ({ hidden: c.hidden, tool: c.dataset.tool }));
+  check(!cur2.hidden && cur2.tool === "hl", `software cursor over page in annotate mode (${JSON.stringify(cur2)})`);
   await page.keyboard.press("Escape");
   check(!(await page.$eval("body", (b) => b.classList.contains("annotating"))), "Esc leaves annotate mode");
+  check(await page.$eval(".ink-cursor", (c) => c.hidden), "software cursor hidden after leaving annotate mode");
   // reload → page ink persists
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.getElementById("pageCount").textContent !== "–", { timeout: 60000 });

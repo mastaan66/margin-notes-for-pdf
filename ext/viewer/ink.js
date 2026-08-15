@@ -128,6 +128,34 @@ export function drawStrokes(ctx, strokes, toCanvas, lineScale, onPaper) {
   for (const s of strokes) drawStroke(ctx, s, toCanvas, lineScale, onPaper);
 }
 
+// ---------- software cursor ----------
+// Chrome on Wayland (and some tablet drivers) shows no pointer for stylus input, so
+// every ink surface drives this shared on-screen cursor: a ring the size of the
+// stroke, in the current colour; dashed for the eraser; a translucent bar for the
+// highlighter. Native cursor is hidden over ink surfaces via CSS.
+let cursorEl = null;
+function cursor() {
+  if (!cursorEl) { cursorEl = document.createElement("div"); cursorEl.className = "ink-cursor"; cursorEl.hidden = true; document.body.appendChild(cursorEl); }
+  return cursorEl;
+}
+export function hideInkCursor() { if (cursorEl) cursorEl.hidden = true; }
+function updateCursor(surface, e) {
+  const c = cursor();
+  const tool = surface.activeTool && surface.pointerId != null ? surface.activeTool : inkState.tool;
+  const ls = surface.o.lineScale();
+  let d;
+  if (tool === "eraser") d = (inkState.size * 3 + 6) * 2;
+  else if (tool === "hl") d = inkState.size * ls * 4;
+  else d = Math.max(4, widthAt({ tool: "pen", size: inkState.size }, e.pressure > 0 ? e.pressure : 0.5, ls));
+  d = Math.max(6, d);
+  c.hidden = false;
+  c.dataset.tool = tool;
+  c.style.width = d + "px"; c.style.height = d + "px";
+  c.style.left = e.clientX + "px"; c.style.top = e.clientY + "px";
+  c.style.setProperty("--cur-color", tool === "hl" ? inkState.hlColor : resolveColor(inkState.color, surface.o.onPaper));
+  document.body.dataset.pointer = e.pointerType || "mouse";
+}
+
 // ---------- surface ----------
 /**
  * opts: {
@@ -146,10 +174,16 @@ export class InkSurface {
     this.erased = null;     // strokes removed during current eraser drag
     this.penSeenAt = 0;
     this._down = this.onDown.bind(this); this._move = this.onMove.bind(this); this._up = this.onUp.bind(this);
+    this._hover = (e) => { if (this.o.isEnabled && !this.o.isEnabled()) return; if (e.pointerType === "touch") return; updateCursor(this, e); };
+    this._leave = (e) => { if (this.pointerId == null || e.pointerId === this.pointerId) hideInkCursor(); };
     this.canvas.addEventListener("pointerdown", this._down);
     this.canvas.addEventListener("pointermove", this._move);
     this.canvas.addEventListener("pointerup", this._up);
     this.canvas.addEventListener("pointercancel", this._up);
+    this.canvas.addEventListener("pointerenter", this._hover);
+    this.canvas.addEventListener("pointermove", this._hover);
+    this.canvas.addEventListener("pointerleave", this._leave);
+    this.canvas.addEventListener("pointerout", this._leave);
     this.canvas.addEventListener("contextmenu", (e) => { if (this.o.isEnabled?.() !== false) e.preventDefault(); });
     this.resize();
   }
@@ -158,6 +192,11 @@ export class InkSurface {
     this.canvas.removeEventListener("pointermove", this._move);
     this.canvas.removeEventListener("pointerup", this._up);
     this.canvas.removeEventListener("pointercancel", this._up);
+    this.canvas.removeEventListener("pointerenter", this._hover);
+    this.canvas.removeEventListener("pointermove", this._hover);
+    this.canvas.removeEventListener("pointerleave", this._leave);
+    this.canvas.removeEventListener("pointerout", this._leave);
+    hideInkCursor();
   }
   resize() {
     const dpr = window.devicePixelRatio || 1;
