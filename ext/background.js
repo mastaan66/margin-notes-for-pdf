@@ -1,6 +1,7 @@
-// Margin Notes for PDF — service worker.
-// Job: make sure any PDF the user opens in a tab lands in our viewer instead of
-// Chrome's built-in one, unless the user asked to bypass or turned us off.
+// Margin Notes — service worker.
+// Jobs: (1) make sure any PDF the user opens in a tab lands in our viewer instead of
+// Chrome's built-in one, unless the user asked to bypass or turned us off; (2) let the
+// viewer dock ordinary web pages / HTML / text / images next to notes ("web mode").
 
 // Firefox exposes promise-based APIs on `browser`; Chrome on `chrome`. Use one name.
 const chrome = globalThis.browser ?? globalThis.chrome;
@@ -11,6 +12,9 @@ const BYPASS_TTL_MS = 30_000;
 const bypass = new Map(); // url -> expiry timestamp
 
 const PDF_URL_RE = /^(https?|file):\/\/[^?#]+\.pdf([?#].*)?$/i;
+// Only these schemes may be docked in the viewer. Everything else (javascript:, data:,
+// chrome:, about:, blob:, ftp:, extension pages…) is refused — see openTarget().
+const DOCKABLE_RE = /^(https?|file):\/\//i;
 
 // ---------- settings ----------
 const DEFAULT_SETTINGS = {
@@ -58,6 +62,13 @@ async function syncRules() {
 function viewerUrlFor(url) {
   // Keep the original URL raw after `?file=`; the viewer parses everything after it.
   return `${VIEWER}?file=${url}`;
+}
+// Route any URL to the right viewer mode: PDFs to the PDF viewer, everything else to web mode.
+// Returns null for URLs we refuse to dock (privileged / script schemes).
+function openTarget(url) {
+  if (!url || typeof url !== "string" || !DOCKABLE_RE.test(url)) return null;
+  if (url.startsWith(chrome.runtime.getURL(""))) return null;
+  return PDF_URL_RE.test(url) ? viewerUrlFor(url) : `${VIEWER}?web=${url}`;
 }
 
 function isBypassed(url) {
@@ -108,6 +119,39 @@ async function redirectTab(tabId, url) {
   }
 }
 
+// ---------- web mode: page agent ----------
+// Inject the page agent (headings, <video> time, selection → viewer) into a page the
+// user is taking notes on: the top frame of a normal tab (side-panel host) or the
+// iframe inside a split-view viewer tab. Sites that forbid embedding are simply not
+// framed — the split view notices the agent never checked in and offers the side panel.
+async function injectAgent(tabId, frameId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (frameId === 0) { if (!DOCKABLE_RE.test(tab?.url || "")) return false; }
+    else if (!tab?.url?.startsWith(VIEWER)) return false;
+    await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] }, files: ["viewer/frame-agent.js"] });
+    return true;
+  } catch (e) { return false; }
+}
+// Frames inside split-view tabs get the agent automatically as they load.
+chrome.webNavigation.onDOMContentLoaded.addListener((d) => {
+  if (d.frameId === 0 || d.parentFrameId !== 0 || d.tabId < 0) return;
+  if (!DOCKABLE_RE.test(d.url)) return;
+  injectAgent(d.tabId, d.frameId);
+});
+
+// Side panel (Chrome) / sidebar (Firefox): notes next to any normal tab.
+const HAS_SIDE_PANEL = !!chrome.sidePanel;
+const HAS_SIDEBAR = !!chrome.sidebarAction;
+async function openNotesPanel(tab) {
+  try {
+    if (HAS_SIDE_PANEL) { await chrome.sidePanel.open({ windowId: tab.windowId }); return true; }
+    if (HAS_SIDEBAR) { await chrome.sidebarAction.open(); return true; }
+  } catch (e) { console.warn("side panel", e); }
+  return false;
+}
+if (HAS_SIDE_PANEL) chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
+
 // ---------- file:// PDFs (DNR can't touch these) ----------
 // Firefox extensions cannot read file:// at all, so leave those to Firefox's own viewer there.
 if (!IS_FIREFOX) {
@@ -152,12 +196,18 @@ function installContextMenu() {
       id: "open-in-margin-notes",
       title: "Open link in Margin Notes",
       contexts: ["link"],
-      targetUrlPatterns: ["*://*/*.pdf", "*://*/*.pdf?*", "*://*/*.pdf#*", "*://*/*.PDF", "file:///*.pdf"],
+      targetUrlPatterns: ["*://*/*", "file:///*"],
+    });
+    chrome.contextMenus.create({
+      id: "notes-panel",
+      title: "Take notes on this page (side panel)",
+      contexts: ["page", "video", "audio", "selection", "frame"],
+      documentUrlPatterns: ["*://*/*", "file:///*"],
     });
     chrome.contextMenus.create({
       id: "open-page-in-margin-notes",
-      title: "Open this page in Margin Notes",
-      contexts: ["page"],
+      title: "Open this page in Margin Notes split view",
+      contexts: ["page", "video", "audio", "frame"],
       documentUrlPatterns: ["*://*/*", "file:///*"],
     });
   });
@@ -165,9 +215,13 @@ function installContextMenu() {
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === "open-in-margin-notes" && info.linkUrl) {
-    chrome.tabs.create({ url: viewerUrlFor(info.linkUrl), index: tab ? tab.index + 1 : undefined });
+    const t = openTarget(info.linkUrl);
+    if (t) chrome.tabs.create({ url: t, index: tab ? tab.index + 1 : undefined });
+  } else if (info.menuItemId === "notes-panel" && tab) {
+    openNotesPanel(tab).then((ok) => { if (ok && tab.id != null) setTimeout(() => injectAgent(tab.id, 0), 300); });
   } else if (info.menuItemId === "open-page-in-margin-notes" && info.pageUrl) {
-    if (tab?.id != null) chrome.tabs.update(tab.id, { url: viewerUrlFor(info.pageUrl) });
+    const t = openTarget(info.pageUrl);
+    if (t && tab?.id != null) chrome.tabs.update(tab.id, { url: t });
   }
 });
 
@@ -190,6 +244,7 @@ chrome.permissions?.onAdded?.addListener(() => syncRules());
 
 // ---------- messages from viewer / popup / options ----------
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.mnAgent) return false; // page-agent traffic is for the viewer / panel, not us
   (async () => {
     switch (msg?.type) {
       case "bypass": {
@@ -215,7 +270,44 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return { ok: true };
       }
       case "openViewer": {
-        await chrome.tabs.create({ url: msg.url ? viewerUrlFor(msg.url) : VIEWER });
+        const t = msg.url ? openTarget(msg.url) : VIEWER;
+        if (!t) return { ok: false, error: "That kind of URL can't be opened in Margin Notes." };
+        if (msg.tabId != null) await chrome.tabs.update(msg.tabId, { url: t }); else await chrome.tabs.create({ url: t });
+        return { ok: true };
+      }
+      case "openTarget": {
+        // Resolve without navigating (used by popup / viewer to build links).
+        return { url: openTarget(msg.url) };
+      }
+      case "injectAgent": {
+        // Panel host: {tabId, frameId: 0}. Split view: no args → every direct sub-frame of the sender's tab
+        // (fallback for when webNavigation missed the frame, e.g. bfcache / same-document navigation).
+        if (msg.tabId != null) return { ok: await injectAgent(msg.tabId, msg.frameId || 0) };
+        const tabId = sender.tab?.id;
+        if (tabId == null) return { ok: false };
+        let frames = [];
+        try { frames = (await chrome.webNavigation.getAllFrames({ tabId })) || []; } catch { /* ignore */ }
+        let n = 0;
+        for (const f of frames) if (f.frameId !== 0 && f.parentFrameId === 0 && DOCKABLE_RE.test(f.url || "")) { if (await injectAgent(tabId, f.frameId)) n++; }
+        return { ok: true, injected: n };
+      }
+      case "openPanel": {
+        // Must be triggered from a user gesture in the caller (popup / landing click).
+        let tab = null;
+        try { tab = msg.tabId != null ? await chrome.tabs.get(msg.tabId) : (await chrome.tabs.query({ active: true, currentWindow: true }))[0]; } catch { /* ignore */ }
+        if (!tab) return { ok: false };
+        const ok = await openNotesPanel(tab);
+        if (ok) setTimeout(() => injectAgent(tab.id, 0), 300);
+        return { ok, supported: HAS_SIDE_PANEL || HAS_SIDEBAR };
+      }
+      case "panelSupported": return { supported: HAS_SIDE_PANEL || HAS_SIDEBAR };
+      case "getActiveTab": {
+        const [t] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        return t ? { id: t.id, url: t.url, title: t.title, windowId: t.windowId } : {};
+      }
+      case "openInTab": {
+        if (!DOCKABLE_RE.test(msg.url || "")) return { ok: false };
+        await chrome.tabs.create({ url: msg.url, index: sender.tab ? sender.tab.index + 1 : undefined });
         return { ok: true };
       }
       case "syncRules": {

@@ -9,7 +9,7 @@ async function load() {
   document.documentElement.dataset.theme = s.theme;
   $("enabled").checked = s.enabled; $("side").value = s.side; $("splitRatio").value = Math.round(s.splitRatio * 100);
   $("splitVal").textContent = `${Math.round(s.splitRatio * 100)}%`;
-  $("defaultZoom").value = s.defaultZoom; $("theme").value = s.theme; $("fontFamily").value = s.fontFamily; $("fontSize").value = s.fontSize; $("autoQuote").checked = s.autoQuote; $("touchDraws").checked = s.touchDraws; $("paper").value = s.paper;
+  $("defaultZoom").value = s.defaultZoom; $("theme").value = s.theme; $("fontFamily").value = s.fontFamily; $("fontSize").value = s.fontSize; $("autoQuote").checked = s.autoQuote; $("autoQuoteWeb").checked = s.autoQuote; $("touchDraws").checked = s.touchDraws; $("paper").value = s.paper;
 }
 function bind(id, key, get) {
   $(id).addEventListener("change", async () => {
@@ -27,6 +27,9 @@ bind("theme", "theme", (e) => e.value);
 bind("fontFamily", "fontFamily", (e) => e.value);
 bind("fontSize", "fontSize", (e) => Math.max(11, Math.min(24, parseInt(e.value, 10) || 15)));
 bind("autoQuote", "autoQuote", (e) => e.checked);
+bind("autoQuoteWeb", "autoQuote", (e) => e.checked);
+$("autoQuote").addEventListener("change", () => { $("autoQuoteWeb").checked = $("autoQuote").checked; });
+$("autoQuoteWeb").addEventListener("change", () => { $("autoQuote").checked = $("autoQuoteWeb").checked; });
 bind("touchDraws", "touchDraws", (e) => e.checked);
 bind("paper", "paper", (e) => e.value);
 $("splitRatio").addEventListener("input", () => { $("splitVal").textContent = `${$("splitRatio").value}%`; });

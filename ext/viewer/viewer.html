@@ -22,9 +22,13 @@
       <svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
     </button>
     <div class="page-ctl">
+      <span id="pageKind" class="page-kind" hidden>§</span>
       <input id="pageInput" type="text" inputmode="numeric" value="1" aria-label="Page number">
       <span class="sep">/</span><span id="pageCount">–</span>
     </div>
+    <button class="tb-btn web-only video-only" id="btnPlay" title="Play / pause (Alt+K)">
+      <svg viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"/></svg>
+    </button>
     <button class="tb-btn" id="btnNext" title="Next page (j / Alt+→)">
       <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
     </button>
@@ -84,9 +88,12 @@
         <button data-act="exportInkPage">Export this page's handwriting (PNG)</button>
         <button data-act="exportInkAll">Export all handwriting (PNGs)</button>
         <hr>
-        <button data-act="download">Download PDF</button>
-        <button data-act="chromeViewer">Open in Chrome's viewer</button>
-        <button data-act="print">Print</button>
+        <button data-act="download" class="pdf-only">Download PDF</button>
+        <button data-act="chromeViewer" class="pdf-only">Open in Chrome's viewer</button>
+        <button data-act="print" class="pdf-only">Print</button>
+        <button data-act="openTab" class="web-only">Open page in a normal tab</button>
+        <button data-act="openPanel" class="web-only">Open in a tab + side panel</button>
+        <button data-act="reloadWeb" class="web-only">Reload page</button>
         <hr>
         <button data-act="shortcuts">Keyboard shortcuts</button>
         <button data-act="options">Settings</button>
@@ -107,6 +114,20 @@
     </div>
     <div id="viewerScroll" class="scroll" tabindex="0">
       <div id="pages" class="pages"></div>
+    </div>
+    <div id="webWrap" class="web-wrap" hidden>
+      <iframe id="webFrame" class="web-frame" title="Document" allow="fullscreen; autoplay; picture-in-picture; clipboard-write; encrypted-media"></iframe>
+      <div id="webHint" class="web-hint" hidden>
+        <div class="web-hint-card">
+          <b id="webHintTitle">Still loading…</b>
+          <p id="webHintText">If this stays blank, the site doesn't allow being embedded. Take notes on it from the side panel instead — it works with any site, including video platforms.</p>
+          <div class="web-hint-actions">
+            <button class="btn" id="webHintPanel">Open in a tab + side panel</button>
+            <button class="btn" id="webHintTab">Open in a normal tab</button>
+            <button class="btn" id="webHintClose">Dismiss</button>
+          </div>
+        </div>
+      </div>
     </div>
     <div id="selBubble" class="sel-bubble" hidden>
       <button id="selQuote">Add to notes</button>
@@ -133,6 +154,7 @@
               <svg id="npPin" viewBox="0 0 24 24" class="pin"><path d="M9 4h6l-1 6 3 3v2h-4v5l-1 1-1-1v-5H7v-2l3-3z"/></svg>
             </button>
             <button class="np-doc-btn" id="npDocBtn" title="Document-level notes (not tied to a page)">Doc</button>
+            <button class="np-doc-btn np-anchor" id="btnAnchor" title="Start a note anchored at the current playback time (Alt+Enter)">＋ note here</button>
           </div>
           <div class="np-actions">
             <button class="np-mini" id="btnPrevNoted" title="Previous page with notes">◀</button>
@@ -175,19 +197,37 @@
   </aside>
 </main>
 
+<div id="panelEmpty" class="panel-empty" hidden>
+  <img src="../icons/icon128.png" alt="" width="40" height="40">
+  <h2>Margin Notes</h2>
+  <p>Switch to a web page, article or video and your notes for it appear here — one per section, or per timestamp for videos.</p>
+  <p class="muted" id="panelEmptyWhy"></p>
+  <button class="btn" id="panelEmptyRetry">Connect to this tab</button>
+</div>
+
 <section id="landing" class="landing">
   <div class="landing-inner">
     <div class="brand">
       <img src="../icons/icon128.png" alt="" width="56" height="56">
       <div>
-        <h1>Margin Notes for PDF</h1>
-        <p class="tagline">PDF on one side, your notes on the other — one note per page, saved as you type.</p>
+        <h1>Margin Notes</h1>
+        <p class="tagline">The document on one side, your notes on the other. PDFs get a note per page; web pages a note per section; videos a note per timestamp — all saved as you type.</p>
       </div>
     </div>
 
+    <form id="urlForm" class="url-form" autocomplete="off">
+      <input id="urlInput" type="text" placeholder="Paste a link — article, YouTube video, PDF, or file:///path/to/file.html" spellcheck="false" aria-label="URL to open">
+      <button type="submit" class="btn">Open</button>
+    </form>
+    <div id="urlHint" class="muted small">PDFs open here in split view. Other pages open in a new tab with the notes <b>side panel</b> — works with any site, YouTube included. Prefer split view? Use <em>Open in split view</em>.</div>
+    <div class="url-actions">
+      <button id="btnPanelHere" class="btn-inline" hidden>Notes for the current tab (side panel)</button>
+      <button id="btnSplitUrl" class="btn-inline">Open in split view instead</button>
+    </div>
+
     <div id="dropZone" class="drop-zone">
-      <p><strong>Drop a PDF here</strong> or <label class="link">choose a file<input id="fileInput" type="file" accept="application/pdf,.pdf" hidden></label></p>
-      <p class="muted">Any PDF you open in a tab will now open here automatically.</p>
+      <p><strong>Drop a file here</strong> or <label class="link">choose a file<input id="fileInput" type="file" accept="application/pdf,.pdf,text/html,.html,.htm,text/plain,.txt,text/markdown,.md,.markdown,image/*" hidden></label></p>
+      <p class="muted">PDF, HTML, Markdown, text or image. Any PDF you open in a tab lands here automatically.</p>
     </div>
 
     <div id="hostPermWarn" class="warn" hidden>
@@ -217,6 +257,8 @@
       <summary>How it works</summary>
       <ul>
         <li>Open any PDF (link, address bar, or local file) — it lands here instead of Chrome's viewer.</li>
+        <li><strong>Web pages &amp; videos:</strong> click the toolbar icon → <em>Notes for this tab</em> (or right-click → <em>Take notes on this page</em>). The page stays a normal tab; notes open in the side panel and follow the section you're reading. On YouTube or any page with a video, notes anchor to the <strong>timestamp</strong> — click one later to jump the video there.</li>
+        <li><strong>Split view</strong> also works for pages that allow embedding, local HTML/Markdown/text/images and YouTube (via its embed player).</li>
         <li>The PDF docks to the left or right (swap with <kbd>Alt</kbd>+<kbd>S</kbd>); the free space is your notebook.</li>
         <li>Notes are tied to the page you're reading and switch as you scroll. Pin to hold a page.</li>
         <li>Select text in the PDF → <em>Add to notes</em> quotes it into that page's note.</li>
@@ -249,6 +291,9 @@
       <kbd>Alt+D / Alt+T</kbd><span>Notes pane: Draw / Text mode</span>
       <kbd>P / H / E</kbd><span>Pen / Highlighter / Eraser (while drawing)</span>
       <kbd>Ctrl+Z / Ctrl+Shift+Z</kbd><span>Undo / redo ink</span>
+      <kbd>Alt+Enter</kbd><span>Video: new note at the current time</span>
+      <kbd>Alt+K</kbd><span>Video: play / pause</span>
+      <kbd>Alt+←/→</kbd><span>Video: seek 10 s (Shift: 30 s)</span>
       <kbd>Esc</kbd><span>Back to the PDF</span>
     </div>
     <button class="btn" id="shortcutsClose">Close</button>

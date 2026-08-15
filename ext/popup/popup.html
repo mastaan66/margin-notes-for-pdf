@@ -18,14 +18,16 @@
   .seg button.on { background: #b4530a; color: #fff !important; }
   button.wide { width: 100%; margin-top: 8px; padding: 7px; border: 1px solid #b9b5aa; border-radius: 6px; background: #fff; cursor: pointer; font: inherit; }
   button.wide:hover { border-color: #b4530a; }
+  button.wide.primary { background: #b4530a !important; color: #fff !important; border-color: #b4530a !important; margin: 0 0 8px; }
   .muted { color: #6b675e; font-size: 12px; margin-top: 8px; }
 </style></head>
 <body>
-<h1><img src="../icons/icon32.png" alt="">Margin Notes for PDF</h1>
+<h1><img src="../icons/icon32.png" alt="">Margin Notes</h1>
+<button class="wide primary" id="openPanel" hidden>Notes for this tab (side panel)</button>
+<button class="wide" id="openThis" hidden>Open this tab in split view</button>
 <div class="row"><span>Open PDFs in Margin Notes</span><label class="sw"><input type="checkbox" id="enabled"><i></i></label></div>
-<div class="row"><span>PDF side</span><span class="seg"><button data-side="left" id="sideLeft">Left</button><button data-side="right" id="sideRight">Right</button></span></div>
-<button class="wide" id="openLibrary">Open library / pick a PDF</button>
-<button class="wide" id="openThis" hidden>Open this tab's PDF in Margin Notes</button>
+<div class="row"><span>Document side</span><span class="seg"><button data-side="left" id="sideLeft">Left</button><button data-side="right" id="sideRight">Right</button></span></div>
+<button class="wide" id="openLibrary">Library / open a file or link</button>
 <button class="wide" id="options">Settings</button>
 <div class="muted">Shortcut: <b>Alt+Shift+M</b> opens this popup.</div>
 <script type="module" src="popup.js"></script>

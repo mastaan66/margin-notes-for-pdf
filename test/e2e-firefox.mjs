@@ -89,6 +89,15 @@ try {
     await sleep(600);
     check((await page.$eval("#noteText", (e) => e.value)) === "Firefox note", "note persisted after reload in Firefox");
   }
+  // web mode (split view): the python http.server directory listing has an <h1> → 2 sections once the agent connects
+  const webUrl = PDF_URL.replace(/\/[^/]*$/, "/");
+  page.goto(`${base}/viewer/viewer.html?web=${webUrl}`, { waitUntil: "load", timeout: 5000 }).catch(() => {});
+  await sleep(800);
+  await poll(() => document.body.dataset.mode === "web", 10000);
+  check(await page.$eval("body", (b) => b.dataset.mode === "web" && b.dataset.host === "frame"), "Firefox: split view web mode active");
+  const agentOk = await poll(() => document.getElementById("pageCount").textContent === "2", 15000);
+  check(agentOk, "Firefox: page agent injected via scripting API (2 sections): " + await page.$eval("#pageCount", (e) => e.textContent));
+  await page.screenshot({ path: path.join(OUT, "ff-web.png") });
 } catch (e) { console.error("TEST ERROR", e); failures.push(e.message); }
 finally { await browser.close().catch(() => {}); }
 console.log(failures.length ? `${failures.length} FAILURE(S)` : "ALL PASSED");

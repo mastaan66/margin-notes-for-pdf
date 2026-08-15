@@ -158,16 +158,36 @@ export const db = {
 };
 
 // Notes as Markdown for one document.
+function clock(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return (h ? `${h}:${String(m).padStart(2, "0")}` : String(m)) + ":" + String(s).padStart(2, "0");
+}
+function timeLink(url, sec) {
+  try {
+    const u = new URL(url);
+    if (/(^|\.)youtube\.com$/.test(u.hostname) || u.hostname === "youtu.be") { u.searchParams.set("t", `${sec}s`); return u.toString(); }
+    if (/vimeo\.com$/.test(u.hostname)) { u.hash = `t=${sec}s`; return u.toString(); }
+    u.hash = `t=${sec}`; return u.toString();
+  } catch { return null; }
+}
+export function pageHeading(doc, pg) {
+  if (pg === 0) return doc?.kind === "video" ? "Whole video" : doc?.kind === "web" ? "Whole page" : "Document notes";
+  if (doc?.kind === "video") { const link = doc.url ? timeLink(doc.url, pg) : null; return link ? `[${clock(pg)}](${link})` : clock(pg); }
+  if (doc?.kind === "web") { if (pg === 1) return doc.sections?.length ? "Top of page" : "Page"; const t = doc.sections?.[pg - 2]; return t ? `§${pg - 1} ${t}` : `§${pg - 1}`; }
+  return `Page ${pg}`;
+}
 export function notesToMarkdown(doc, notes, ink = []) {
-  const title = doc?.title || doc?.filename || "Untitled PDF";
+  const title = doc?.title || doc?.filename || (doc?.kind ? "Untitled page" : "Untitled PDF");
   const lines = [`# Notes — ${title}`, ""];
   if (doc?.url) lines.push(`Source: ${doc.url}`, "");
   const inkPages = new Set(ink.map((i) => i.page));
-  lines.push(`_${notes.length} page note${notes.length === 1 ? "" : "s"}${inkPages.size ? `, handwriting on ${inkPages.size} page${inkPages.size === 1 ? "" : "s"}` : ""}, exported ${new Date().toLocaleString()}_`, "");
+  const unit = doc?.kind === "video" ? "timestamped note" : doc?.kind === "web" ? "section note" : "page note";
+  lines.push(`_${notes.length} ${unit}${notes.length === 1 ? "" : "s"}${inkPages.size ? `, handwriting on ${inkPages.size}` : ""}, exported ${new Date().toLocaleString()}_`, "");
   const pages = [...new Set([...notes.map((n) => n.page), ...inkPages])].sort((a, b) => a - b);
   const byPage = new Map(notes.map((n) => [n.page, n]));
   for (const pg of pages) {
-    lines.push(pg === 0 ? "## Document notes" : `## Page ${pg}`, "");
+    lines.push(`## ${pageHeading(doc, pg)}`, "");
     const n = byPage.get(pg);
     if (n) lines.push(n.text.trim(), "");
     const kinds = ink.filter((i) => i.page === pg).map((i) => (i.target === "page" ? "annotations on the page" : "sketch")).join(" + ");

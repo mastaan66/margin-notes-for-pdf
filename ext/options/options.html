@@ -21,16 +21,22 @@
 </style></head>
 <body>
 <div class="wrap">
-  <h1>Margin Notes for PDF</h1>
-  <p class="sub">Settings sync across your Chrome profile. Notes themselves stay on this device (IndexedDB) — back them up below.</p>
+  <h1>Margin Notes</h1>
+  <p class="sub">Settings sync across your browser profile. Notes themselves stay on this device (IndexedDB) — back them up below.</p>
 
   <fieldset><legend>Opening PDFs</legend>
     <div class="opt"><label>Open PDFs in Margin Notes<small>When off, Chrome's built-in viewer is used. You can still right-click a link → “Open link in Margin Notes”.</small></label><input type="checkbox" id="enabled"></div>
     <div class="opt"><label>Local files<small>Chrome needs “Allow access to file URLs” for <code>file://</code> PDFs.</small></label><button class="btn" id="fileAccess">Check…</button></div>
   </fieldset>
 
+  <fieldset><legend>Web pages &amp; videos</legend>
+    <div class="opt"><label>How it works<small>Toolbar icon → <em>Notes for this tab</em> (or right-click → <em>Take notes on this page</em>) opens the notes side panel next to any normal tab. Notes follow the section you're reading; on pages with a video (YouTube, courses, any HTML5 player) they anchor to the playback time — click a note later to jump there. Nothing is auto-intercepted: only PDFs open in Margin Notes by themselves.</small></label></div>
+    <div class="opt"><label>Split view<small>Library page → paste a link → <em>Open in split view</em> docks the page in an iframe like a PDF. Works for pages that allow embedding, local HTML / Markdown / text / images and YouTube (via its embed player). Sites that forbid embedding are <em>not</em> forced — use the side panel for those.</small></label></div>
+    <div class="opt"><label>“Add to notes” bubble on web pages<small>Shows a small bubble on text you select in the annotated page (same as the PDF one). Off = only <kbd>Ctrl+Q</kbd>.</small></label><input type="checkbox" id="autoQuoteWeb"></div>
+  </fieldset>
+
   <fieldset><legend>Layout</legend>
-    <div class="opt"><label>PDF side</label><select id="side"><option value="left">Left (notes on the right)</option><option value="right">Right (notes on the left)</option></select></div>
+    <div class="opt"><label>Document side</label><select id="side"><option value="left">Left (notes on the right)</option><option value="right">Right (notes on the left)</option></select></div>
     <div class="opt"><label>PDF width<small><span id="splitVal"></span> of the window</small></label><input type="range" id="splitRatio" min="25" max="85" step="1"></div>
     <div class="opt"><label>Default zoom</label><select id="defaultZoom"><option value="width">Fit width</option><option value="page">Fit page</option></select></div>
     <div class="opt"><label>Theme</label><select id="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></div>

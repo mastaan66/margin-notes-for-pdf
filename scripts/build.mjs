@@ -36,6 +36,10 @@ ff.background = { scripts: ["background.js"], type: "module" };
 ff.browser_specific_settings = {
   gecko: { id: "margin-notes@lumenar.dev", strict_min_version: "140.0", data_collection_permissions: { required: ["none"] } },
 };
+// Firefox has no sidePanel API; its sidebar_action is the equivalent host for the notes panel.
+delete ff.side_panel;
+ff.permissions = ff.permissions.filter((p) => p !== "sidePanel");
+ff.sidebar_action = { default_title: "Margin Notes", default_panel: "viewer/panel.html", default_icon: manifest.icons, open_at_install: false };
 // Firefox: `commands._execute_action` is fine; `web_accessible_resources` same shape.
 // unlimitedStorage + contextMenus + webNavigation + webRequest + declarativeNetRequest all exist in Firefox MV3.
 fs.writeFileSync(path.join(ffDir, "manifest.json"), JSON.stringify(ff, null, 2) + "\n");

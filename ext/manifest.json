@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "Margin Notes for PDF",
   "short_name": "Margin Notes",
-  "version": "1.2.0",
-  "description": "Opens PDFs docked to the left or right and turns the free space into a per-page notebook. Notes stay linked to the page you're reading.",
+  "version": "1.3.0",
+  "description": "Dock PDFs, web pages, HTML, text and images to one side and take per-page (or per-section) notes and handwriting in the free space.",
   "minimum_chrome_version": "121",
   "icons": {
     "16": "icons/icon16.png",
@@ -18,6 +18,8 @@
     "tabs",
     "storage",
     "contextMenus",
+    "scripting",
+    "sidePanel",
     "unlimitedStorage"
   ],
   "host_permissions": ["<all_urls>"],
@@ -33,6 +35,7 @@
     }
   },
   "options_ui": { "page": "options/options.html", "open_in_tab": true },
+  "side_panel": { "default_path": "viewer/panel.html" },
   "web_accessible_resources": [
     { "resources": ["viewer/viewer.html"], "matches": ["<all_urls>"] }
   ],
