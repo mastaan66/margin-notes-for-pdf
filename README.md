@@ -7,7 +7,7 @@ Opens every PDF you land on **docked to the left or right** of the tab, and turn
 ### Chrome / Edge / Brave (unpacked)
 1. Open `chrome://extensions` → turn on **Developer mode** (top right).
 2. Click **Load unpacked** → choose the `ext/` folder of this repo (or unzip `dist/margin-notes-chrome-<v>.zip`).
-3. On the extension's card click **Details** → enable **Allow access to file URLs** (needed for `file://` PDFs — downloads, local files).
+3. On the extension's card click **Details** → enable **Allow access to file URLs** (needed for `file://` PDFs - downloads, local files).
 4. Open any PDF (link, address bar, local file). It opens in Margin Notes.
 
 ### Firefox (temporary add-on)
@@ -16,7 +16,7 @@ Opens every PDF you land on **docked to the left or right** of the tab, and turn
 3. If a banner asks, click **Allow access to websites** on the landing page (Firefox MV3 host permissions are opt-in). Firefox 140+ usually grants them at install.
 4. Temporary add-ons are removed on restart. For a permanent install, sign it: `npx web-ext sign --source-dir build/firefox --channel unlisted --api-key … --api-secret …` (free AMO account) and install the resulting `.xpi`.
 
-Firefox differences: extensions can't read `file://`, so local PDFs open in Firefox's own viewer — drop them onto the Margin Notes landing page instead. Everything else (interception, notes, ink) is identical.
+Firefox differences: extensions can't read `file://`, so local PDFs open in Firefox's own viewer - drop them onto the Margin Notes landing page instead. Everything else (interception, notes, ink) is identical.
 
 Pin the toolbar icon if you want the quick toggle / side switch popup (`Alt+Shift+M`).
 
@@ -28,7 +28,7 @@ Pin the toolbar icon if you want the quick toggle / side switch popup (`Alt+Shif
 | Layout | PDF left or right (`Alt+S`), draggable splitter (double-click resets), notes pane hideable (`Alt+N`), light/dark/system theme, "dim pages" night mode. |
 | Viewer | Continuous scroll, fit width/page, zoom (`Ctrl`+wheel, `+`/`-`), rotate, find (`Ctrl+F`, highlights in text layer), text selection, clickable internal/external links, outline (bookmarks) tab, `#page=N` deep links, resumes on last page, password PDFs. Rendering is virtualised (~1 screen ahead/behind), tested on a 1971-page PDF. |
 | Notes | One note per page + a document-level note. Follows scroll; **pin** to hold a page. Markdown subset with live preview (`Ctrl+E`): headings, lists, tasks, quotes, code, links, `p.12` auto-links to page 12. List continuation, `Tab` indent, `Ctrl+B/I`. Word count, saved indicator, "pages with notes" strip, prev/next noted page. |
-| Handwriting | **Draw mode** in the notes pane: a per-page sketch pad (pen / highlighter / stroke-eraser, 6 colours, 3 widths, pressure-sensitive, ruled/grid/dot/blank paper, grows as you write, undo/redo). **Annotate mode** (`A`): write directly on the PDF pages — strokes are stored in PDF coordinates so they stay put across zoom/rotate and are re-rendered on every page render. Pointer Events: pen, mouse and (optionally) touch; palm rejection while a pen is active; pen barrel/eraser button erases. Export any page's handwriting as PNG (page + ink composited). |
+| Handwriting | **Draw mode** in the notes pane: a per-page sketch pad (pen / highlighter / stroke-eraser, 6 colours, 3 widths, pressure-sensitive, ruled/grid/dot/blank paper, grows as you write, undo/redo). **Annotate mode** (`A`): write directly on the PDF pages - strokes are stored in PDF coordinates so they stay put across zoom/rotate and are re-rendered on every page render. Pointer Events: pen, mouse and (optionally) touch; palm rejection while a pen is active; pen barrel/eraser button erases. Export any page's handwriting as PNG (page + ink composited). |
 | Quote | Select text in the PDF → *Add to notes* bubble (or `Ctrl+Q`) drops it into that page's note as a `>` quote. |
 | All notes | Filterable list of every note in the document; click to jump. |
 | Storage | IndexedDB, keyed by PDF fingerprint (`docs` + `notes` stores). Export a document's notes as Markdown/JSON, copy all, back up / restore everything from Settings. |
